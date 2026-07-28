@@ -136,9 +136,9 @@ runit_is_reachable() {
 }
 
 runit_pid() {
-  local status
+  local status pid_pattern='^run:[^;]*\(pid[[:space:]]+([0-9]+)\)'
   status="$(sv status "$SERVICE_DIR" 2>/dev/null)" || return 1
-  [[ "$status" =~ ^run:.*\(pid[[:space:]]+([0-9]+)\) ]] || return 1
+  [[ "$status" =~ $pid_pattern ]] || return 1
   printf '%s' "${BASH_REMATCH[1]}"
 }
 
