@@ -74,7 +74,7 @@ test("controller resolves the project when invoked through a symlink", { skip: s
 
   t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
 
-  const result = spawnSync(linkedController, ["run"], {
+  const result = spawnSync(bashExecutable, [linkedController, "run"], {
     env: {
       ...process.env,
       STREAMFORGE_NODE_BIN: fakeNode,
