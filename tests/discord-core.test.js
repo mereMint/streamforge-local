@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import { PermissionFlagsBits } from "discord.js";
+import { GatewayIntentBits, PermissionFlagsBits } from "discord.js";
 
 import { createDatabase } from "../src/database.js";
 import {
   buildVoicePermissionOverwrites,
   createDiscordBot,
+  discordConnectionDiagnostic,
+  discordGatewayIntents,
   isDiscordAdmin,
   normalizeVoicePreferences,
   sanitizeVoiceChannelName,
@@ -18,6 +20,27 @@ async function temporaryDirectory() {
   await mkdir(root, { recursive: true });
   return mkdtemp(join(root, "discord-core-"));
 }
+
+test("Discord requests the privileged members intent only for automatic roles", () => {
+  const basic = discordGatewayIntents({
+    discord: { token: "token", autoRoleId: "" },
+  });
+  assert.equal(basic.includes(GatewayIntentBits.Guilds), true);
+  assert.equal(basic.includes(GatewayIntentBits.GuildVoiceStates), true);
+  assert.equal(basic.includes(GatewayIntentBits.GuildMembers), false);
+
+  const autoRole = discordGatewayIntents({
+    discord: { token: "token", autoRoleId: "role-id" },
+  });
+  assert.equal(autoRole.includes(GatewayIntentBits.GuildMembers), true);
+  assert.equal(
+    discordConnectionDiagnostic(
+      new Error("Used disallowed intents"),
+      { discord: { autoRoleId: "role-id" } },
+    ).code,
+    "disallowed-intents",
+  );
+});
 
 test("database persists JSON-backed records across restarts", async (t) => {
   const dataDir = await temporaryDirectory();
@@ -274,6 +297,8 @@ test("bot stays dormant without credentials and service commands use saved IDs",
     guildName: null,
     pingMs: null,
     connectionError: null,
+    connectionDiagnostic: null,
+    requiresServerMembersIntent: false,
     reactiveSpeaking: false,
     reactiveVoiceChannelId: null,
     temporaryVoiceChannels: 0,

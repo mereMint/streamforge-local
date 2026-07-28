@@ -2,7 +2,13 @@ import crypto from "node:crypto";
 import WebSocket from "ws";
 
 const IRC_URL = "wss://irc-ws.chat.twitch.tv:443";
-const COMMAND_ACTIONS = new Set(["custom", "now-playing", "playlist", "song-request"]);
+const COMMAND_ACTIONS = new Set([
+  "custom",
+  "now-playing",
+  "playlist",
+  "song-request",
+  "uptime",
+]);
 const COMMAND_PERMISSIONS = new Set(["everyone", "subscriber", "moderator", "broadcaster"]);
 const MAX_COMMANDS = 100;
 
@@ -40,6 +46,15 @@ export function defaultTwitchCommands() {
       enabled: true,
       permission: "everyone",
       cooldownSeconds: 20,
+    },
+    {
+      id: "builtin-uptime",
+      trigger: "uptime",
+      action: "uptime",
+      response: "StreamForge has been online for {uptime}.",
+      enabled: true,
+      permission: "everyone",
+      cooldownSeconds: 10,
     },
     {
       id: "builtin-song-request",
@@ -182,6 +197,68 @@ function applyTemplate(template, values) {
   return output.replace(/\s+/g, " ").trim().slice(0, 450);
 }
 
+export function parseCommandInvocation(message, prefix = "!") {
+  const content = String(message || "");
+  if (!content.startsWith(prefix)) return null;
+  const invocation = content.slice(prefix.length).trim();
+  if (!invocation) return null;
+  const separator = invocation.search(/\s/);
+  const rawTrigger =
+    separator === -1 ? invocation : invocation.slice(0, separator);
+  let args = separator === -1 ? "" : invocation.slice(separator).trim();
+  if (
+    args.length >= 2 &&
+    ((args.startsWith('"') && args.endsWith('"')) ||
+      (args.startsWith("'") && args.endsWith("'")))
+  ) {
+    args = args.slice(1, -1).trim();
+  }
+  return { trigger: safeCommandName(rawTrigger), args };
+}
+
+function durationLabel(seconds) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  const days = Math.floor(total / 86_400);
+  const hours = Math.floor((total % 86_400) / 3_600);
+  const minutes = Math.floor((total % 3_600) / 60);
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (hours || days) parts.push(`${hours}h`);
+  parts.push(`${minutes}m`);
+  return parts.join(" ");
+}
+
+function spotifyPlaylistFallback(spotifyStatus, configuredUrl) {
+  if (configuredUrl) {
+    return { value: configuredUrl, response: "Stream playlist: {playlist}" };
+  }
+  if (
+    spotifyStatus?.context?.type === "playlist" &&
+    spotifyStatus.context.url
+  ) {
+    return {
+      value: spotifyStatus.context.url,
+      response: "Current Spotify playlist: {playlist}",
+    };
+  }
+  if (spotifyStatus?.track?.albumUrl) {
+    return {
+      value: `${spotifyStatus.track.album || "Current album"} — ${spotifyStatus.track.albumUrl}`,
+      response: "Current Spotify album: {playlist}",
+    };
+  }
+  if (spotifyStatus?.track?.url) {
+    return {
+      value: spotifyStatus.track.url,
+      response: "Current Spotify track: {playlist}",
+    };
+  }
+  return {
+    value: "No Spotify playlist, album, or track is available",
+    response: "{playlist}",
+  };
+}
+
 export class TwitchManager {
   constructor({ config, db, vault, spotify, hub, logger = console }) {
     this.config = config;
@@ -196,13 +273,26 @@ export class TwitchManager {
     this.connected = false;
     this.connectionError = null;
     this.cooldowns = new Map();
+    this.lastConnectedAt = null;
+    this.lastMessageAt = null;
+    this.reconnectAttempts = 0;
   }
 
   settings() {
     const stored = this.db.getSetting("settings:twitch", {});
-    const commands = normalizeTwitchCommands(
-      stored.commands?.length ? stored.commands : defaultTwitchCommands(),
-    );
+    const storedCommands = normalizeTwitchCommands(stored.commands);
+    const commands = [...storedCommands];
+    for (const builtIn of defaultTwitchCommands()) {
+      if (
+        commands.some(
+          (command) =>
+            command.id === builtIn.id || command.trigger === builtIn.trigger,
+        )
+      ) {
+        continue;
+      }
+      commands.push(builtIn);
+    }
     return {
       enabled: Boolean(stored.enabled),
       channel: safeCommandName(stored.channel),
@@ -241,6 +331,16 @@ export class TwitchManager {
       commandCount: settings.commands.filter((command) => command.enabled).length,
       oauthTokenConfigured: Boolean(this.secrets().oauthToken),
       connectionError: this.connectionError,
+      connectionState: this.connected
+        ? "connected"
+        : this.socket
+          ? "connecting"
+          : settings.enabled
+            ? "disconnected"
+            : "disabled",
+      lastConnectedAt: this.lastConnectedAt,
+      lastMessageAt: this.lastMessageAt,
+      reconnectAttempts: this.reconnectAttempts,
     };
   }
 
@@ -304,10 +404,13 @@ export class TwitchManager {
         if (line.includes(" 001 ")) {
           this.connected = true;
           this.connectionError = null;
+          this.lastConnectedAt = new Date().toISOString();
+          this.reconnectAttempts = 0;
           this.hub.broadcast("twitch", "twitch.status", this.status());
         }
         const message = parseTwitchPrivmsg(line);
         if (message) {
+          this.lastMessageAt = new Date().toISOString();
           if (message.bits > 0) {
             this.publishAlert({
               eventType: "bits",
@@ -333,6 +436,7 @@ export class TwitchManager {
       this.connected = false;
       this.hub.broadcast("twitch", "twitch.status", this.status());
       if (!this.explicitStop && this.configured()) {
+        this.reconnectAttempts += 1;
         clearTimeout(this.reconnectTimer);
         this.reconnectTimer = setTimeout(() => this.start(), 5_000);
         this.reconnectTimer.unref?.();
@@ -366,11 +470,12 @@ export class TwitchManager {
     ) {
       return null;
     }
-    const [rawTrigger, ...parts] = message.message
-      .slice(settings.commandPrefix.length)
-      .trim()
-      .split(/\s+/);
-    const trigger = safeCommandName(rawTrigger);
+    const invocation = parseCommandInvocation(
+      message.message,
+      settings.commandPrefix,
+    );
+    if (!invocation) return null;
+    const { trigger, args } = invocation;
     const command = settings.commands.find(
       (candidate) => candidate.enabled && candidate.trigger === trigger,
     );
@@ -380,8 +485,8 @@ export class TwitchManager {
     if (Date.now() < nextAllowed) return null;
     this.cooldowns.set(cooldownKey, Date.now() + command.cooldownSeconds * 1_000);
 
-    const args = parts.join(" ");
-    const track = this.spotify.status().track;
+    const spotifyStatus = this.spotify.status();
+    const track = spotifyStatus.track;
     let requestedTrack = null;
     if (command.action === "song-request") {
       if (!args) {
@@ -402,11 +507,16 @@ export class TwitchManager {
     const song = requestedTrack?.title || track?.title || "Nothing is playing";
     const artist =
       requestedTrack?.artists?.join(", ") || track?.artists?.join(", ") || "";
+    const playlist = spotifyPlaylistFallback(
+      spotifyStatus,
+      settings.playlistUrl,
+    );
     const defaults = {
       custom: command.response || "{user}: {args}",
       "now-playing": command.response || "Now playing: {song} — {artist}",
-      playlist: command.response || "Stream playlist: {playlist}",
+      playlist: command.response || playlist.response,
       "song-request": command.response || "{user}, queued {song}.",
+      uptime: command.response || "StreamForge has been online for {uptime}.",
     };
     const response = applyTemplate(defaults[command.action], {
       user: message.displayName || message.username,
@@ -414,7 +524,8 @@ export class TwitchManager {
       args,
       song,
       artist,
-      playlist: settings.playlistUrl || "No playlist URL is configured",
+      playlist: playlist.value,
+      uptime: durationLabel(process.uptime()),
       channel: message.channel,
     });
     return this.sendMessage(message.channel, response);

@@ -7,7 +7,12 @@ async function responseJson(response) {
   if (response.status === 204) return null;
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new Error(body?.error?.message || body?.error_description || response.statusText);
+    const error = new Error(
+      body?.error?.message || body?.error_description || response.statusText,
+    );
+    error.status = response.status;
+    error.spotifyError = body?.error || body?.error_description || null;
+    throw error;
   }
   return body;
 }
@@ -19,7 +24,13 @@ export class SpotifyManager {
     this.vault = vault;
     this.hub = hub;
     this.timer = null;
-    this.nowPlaying = { connected: false, playing: false, track: null };
+    this.nowPlaying = {
+      connected: false,
+      playing: false,
+      track: null,
+      context: null,
+      error: null,
+    };
   }
 
   configured() {
@@ -90,11 +101,11 @@ export class SpotifyManager {
     return record;
   }
 
-  async token() {
+  async token(forceRefresh = false) {
     const encrypted = await this.db.getOauthToken("spotify");
     if (!encrypted) return null;
     let token = this.vault.decrypt(encrypted);
-    if (token.expiresAt > Date.now()) return token;
+    if (!forceRefresh && token.expiresAt > Date.now()) return token;
     if (!token.refreshToken) return null;
     const refreshed = await this.tokenRequest({
       grant_type: "refresh_token",
@@ -109,52 +120,81 @@ export class SpotifyManager {
     try {
       const token = await this.token();
       if (!token) {
-        this.nowPlaying = { connected: false, playing: false, track: null };
+        this.nowPlaying = {
+          connected: false,
+          playing: false,
+          track: null,
+          context: null,
+          error: "Spotify authorization is required.",
+        };
+        this.hub.broadcast("spotify", "spotify.status", this.nowPlaying);
         return this.nowPlaying;
       }
-      const response = await fetch(PLAYER_URL, {
-        headers: { authorization: `Bearer ${token.accessToken}` },
-      });
-      const body = await responseJson(response);
+      const body = await this.authorizedFetch(PLAYER_URL, {}, token);
       const item = body?.item;
+      const playbackContext = body?.context;
       this.nowPlaying = {
         connected: true,
         playing: Boolean(body?.is_playing),
         progressMs: body?.progress_ms || 0,
+        error: null,
+        context: playbackContext
+          ? {
+              type: playbackContext.type || null,
+              uri: playbackContext.uri || null,
+              url: playbackContext.external_urls?.spotify || null,
+            }
+          : null,
         track: item
           ? {
               id: item.id,
               title: item.name,
               artists: item.artists?.map((artist) => artist.name) || [],
               album: item.album?.name || "",
+              albumUri: item.album?.uri || null,
+              albumUrl: item.album?.external_urls?.spotify || null,
               artwork: item.album?.images?.[0]?.url || null,
               durationMs: item.duration_ms || 0,
               url: item.external_urls?.spotify || null,
             }
           : null,
       };
-      this.hub.broadcast("spotify", "spotify", this.nowPlaying);
+      this.hub.broadcast("spotify", "spotify.status", this.nowPlaying);
     } catch (error) {
+      const authenticationFailed = [400, 401, 403].includes(error.status);
       this.nowPlaying = {
-        connected: false,
+        ...this.nowPlaying,
+        connected: authenticationFailed ? false : this.nowPlaying.connected,
         playing: false,
-        track: null,
         error: error.message,
       };
+      this.hub.broadcast("spotify", "spotify.status", this.nowPlaying);
     }
     return this.nowPlaying;
   }
 
-  async authorizedFetch(url, options = {}) {
-    const token = await this.token();
+  async authorizedFetch(url, options = {}, suppliedToken = null) {
+    let token = suppliedToken || (await this.token());
     if (!token) throw new Error("Spotify is not connected.");
-    const response = await fetch(url, {
+    let response = await fetch(url, {
       ...options,
       headers: {
         ...options.headers,
         authorization: `Bearer ${token.accessToken}`,
       },
     });
+    if (response.status === 401 && token.refreshToken) {
+      token = await this.token(true);
+      if (token) {
+        response = await fetch(url, {
+          ...options,
+          headers: {
+            ...options.headers,
+            authorization: `Bearer ${token.accessToken}`,
+          },
+        });
+      }
+    }
     return responseJson(response);
   }
 
@@ -189,7 +229,13 @@ export class SpotifyManager {
 
   async disconnect() {
     await this.db.deleteOauthToken("spotify");
-    this.nowPlaying = { connected: false, playing: false, track: null };
+    this.nowPlaying = {
+      connected: false,
+      playing: false,
+      track: null,
+      context: null,
+      error: null,
+    };
     this.hub.broadcast("spotify", "spotify.status", this.nowPlaying);
     return this.status();
   }

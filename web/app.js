@@ -3,12 +3,14 @@ import { createClientId } from "./client-id.js";
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
-const PROFILE_TYPES = ["chat", "alerts", "reactives", "timer", "spotify"];
+const PROFILE_TYPES = ["chat", "alerts", "reactives", "timer", "spotify", "poll"];
 const NUMBER_FIELDS = new Set([
   "messageLimit", "fontSize", "opacity", "duration", "radius", "width", "height",
   "secondsPerEvent", "startingSeconds", "goal", "backupRetention", "voiceDefaultLimit",
   "fontWeight", "lineHeight", "messageSpacing", "messageRadius", "emoteScale",
-  "digitSize", "panelOpacity", "intervalMinutes", "cooldownSeconds"
+  "digitSize", "panelOpacity", "intervalMinutes", "cooldownSeconds", "borderWidth",
+  "shadowStrength", "digitSpacing", "glowStrength", "backdropBlur", "soundVolume",
+  "durationSeconds"
 ]);
 
 const DEFAULT_PROFILES = {
@@ -20,20 +22,22 @@ const DEFAULT_PROFILES = {
     messageRadius: 14, showTimestamps: false, showTwitchEmotes: true,
     showBttvEmotes: true, showFfzEmotes: true, showSevenTvEmotes: true,
     emoteScale: 1, blockedUsers: "", blockedBots: "", hideCommands: false,
-    ignoredCommands: "", blockedWords: ""
+    ignoredCommands: "", blockedWords: "", accentStyle: "rail", borderWidth: 1,
+    shadowStrength: 35
   },
   alerts: {
     id: "default", name: "Main alerts", headline: "{user} just followed!",
     message: "Welcome to the forge.", duration: 7, animation: "impact",
     exitAnimation: "fade", layout: "badge", position: "center", fontFamily: "System Sans",
     textColor: "#ffffff", accentColor: "#ffb454", backgroundColor: "#101722", radius: 18,
-    listenAllEvents: true
+    listenAllEvents: true, imageUrl: "", soundUrl: "", soundVolume: 75,
+    eventVariants: {}
   },
   reactives: {
     id: "default", name: "Podcast", width: 1920, height: 1080,
     backgroundColor: "#121923", voiceChannelId: "", autoAddMembers: true,
     useDiscordAvatars: true, talkingAnimation: "bounce", mutedStyle: "dim",
-    showNames: true,
+    showNames: true, avatarShape: "circle", imageFit: "contain", nameStyle: "discord",
     participants: [
       { id: createClientId(), name: "Host", discordUserId: "", idleUrl: "", talkingUrl: "", x: 36, y: 58, size: 28 },
       { id: createClientId(), name: "Guest", discordUserId: "", idleUrl: "", talkingUrl: "", x: 65, y: 58, size: 28 }
@@ -44,13 +48,22 @@ const DEFAULT_PROFILES = {
     secondsPerEvent: 300, startingSeconds: 7200, goal: 50, layout: "industrial",
     textColor: "#f7fbff", accentColor: "#37e6b2", backgroundColor: "#0e151d",
     fontFamily: "Monospace", digitSize: 94, panelOpacity: 92, radius: 18,
-    align: "center", showLabel: true, showMeta: true, showProgress: false
+    align: "center", showLabel: true, showMeta: true, showProgress: false,
+    accentStyle: "rail", digitSpacing: -7, borderWidth: 1, glowStrength: 45
   },
   spotify: {
     id: "default", name: "Now playing", displayMode: "change", duration: 12,
     position: "bottom-left", showAlbumArt: true, showProgress: true, layout: "card",
     textColor: "#ffffff", accentColor: "#1ed760", backgroundColor: "#121816",
-    intervalMinutes: 5, animation: "slide"
+    intervalMinutes: 5, animation: "slide", fontFamily: "System Sans", radius: 18,
+    artShape: "rounded", backdropBlur: 12, showAlbumName: true
+  },
+  poll: {
+    id: "default", name: "Chat poll", channel: "", question: "What should happen next?",
+    choices: [{ label: "Option 1", token: "1" }, { label: "Option 2", token: "2" }],
+    durationSeconds: 60, allowVoteChanges: true, layout: "arena",
+    textColor: "#ffffff", accentColor: "#8b7cff", backgroundColor: "#10131d",
+    fontFamily: "System Sans", radius: 18, animation: "rise"
   }
 };
 
@@ -64,7 +77,10 @@ const state = {
   loadedProfiles: new Set(),
   publicOrigin: location.origin,
   draggingParticipant: null,
-  twitchCommands: []
+  twitchCommands: [],
+  servicePresets: [],
+  googleDriveFlowId: null,
+  googleDrivePollTimer: null
 };
 
 class ApiError extends Error {
@@ -157,6 +173,7 @@ function setConnection(mode, text) {
 }
 
 function bindGlobalEvents() {
+  prepareEnhancedControls();
   $("#loginForm").addEventListener("submit", login);
   $("#logoutButton").addEventListener("click", logout);
   $("#menuButton").addEventListener("click", toggleSidebar);
@@ -172,6 +189,10 @@ function bindGlobalEvents() {
     button.addEventListener("click", () => document.getElementById(button.dataset.dialogOpen).showModal());
   });
   $("#serviceForm").addEventListener("submit", createService);
+  $("#useServicePreset")?.addEventListener("click", useServicePreset);
+  $$("[data-close-service-logs]").forEach((button) => {
+    button.addEventListener("click", () => $("#serviceLogDialog")?.close());
+  });
 
   $$("[data-profile-form]").forEach(bindProfileForm);
   $$("[data-settings-form]").forEach(bindSettingsForm);
@@ -180,8 +201,14 @@ function bindGlobalEvents() {
     button.addEventListener("click", () => copyOverlayUrl(button.dataset.copyUrl));
   });
   $$("[data-refresh-preview]").forEach((button) => {
+    if (!button.getAttribute("aria-label")) {
+      const previewName =
+        button.closest(".preview-column, .scene-composer")?.querySelector("iframe")?.title ||
+        "overlay";
+      button.setAttribute("aria-label", `Refresh ${previewName}`);
+    }
     button.addEventListener("click", () => {
-      const iframe = button.closest(".preview-column")?.querySelector("iframe");
+      const iframe = button.closest("aside")?.querySelector("iframe");
       if (iframe) iframe.src = iframe.src;
     });
   });
@@ -191,16 +218,26 @@ function bindGlobalEvents() {
   $$("[data-timer-action]").forEach((button) => {
     button.addEventListener("click", () => controlTimer(button.dataset.timerAction));
   });
+  $$("[data-poll-action]").forEach((button) => {
+    button.addEventListener("click", () => controlPoll(button.dataset.pollAction));
+  });
 
   $("#addParticipant").addEventListener("click", addParticipant);
   $("#syncReactiveChannel")?.addEventListener("click", detectReactiveChannel);
-  $("#sceneStage").addEventListener("pointerdown", beginParticipantDrag);
+  $("#sceneStage")?.addEventListener("pointerdown", beginParticipantDrag);
   window.addEventListener("pointermove", moveParticipant);
   window.addEventListener("pointerup", endParticipantDrag);
 
   $("#publishStatusPanel").addEventListener("click", () => discordAction("publish-status"));
   $("#testDiscord").addEventListener("click", () => discordAction("test"));
   $("#spotifyDisconnect")?.addEventListener("click", disconnectSpotify);
+  $("#spotifyUseSuggestedRedirect")?.addEventListener("click", (event) => {
+    const input = $('[data-settings-form="spotify"] [name="redirectUri"]');
+    if (!input) return;
+    input.value = event.currentTarget.dataset.suggestedUri || "http://127.0.0.1:8787/auth/spotify/callback";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.focus();
+  });
   $("#addTwitchCommand")?.addEventListener("click", addTwitchCommand);
   $("#testTwitch")?.addEventListener("click", testTwitchConnection);
   $("#twitchPreviewMessage")?.addEventListener("input", renderTwitchCommandPreview);
@@ -214,6 +251,26 @@ function bindGlobalEvents() {
   $("#backupNow").addEventListener("click", runBackup);
   $("#testBackup").addEventListener("click", () => backupAction("test"));
   $("#refreshBackups").addEventListener("click", loadBackups);
+  $("#startGoogleDriveSetup")?.addEventListener("click", startGoogleDriveSetup);
+  $("#cancelGoogleDriveSetup")?.addEventListener("click", cancelGoogleDriveSetup);
+  $$("[data-asset-picker]").forEach((input) => {
+    if (input.accept.startsWith("image/")) input.accept = "image/png,image/webp,image/gif";
+    input.addEventListener("change", uploadAsset);
+  });
+  $$("[data-reset-custom-css]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const form = button.closest("[data-profile-form]");
+      const input = form?.elements.customCss;
+      if (!input || (!input.value && !window.confirm("Custom CSS is already empty. Reset it anyway?"))) return;
+      input.value = "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      toast("Custom overlay CSS reset.");
+    });
+  });
+  $("#alertPreviewEvent")?.addEventListener("change", () => {
+    renderAlertVariantFields();
+    postPreviewConfig("alerts");
+  });
 
   window.addEventListener("message", (event) => {
     if (event.origin === location.origin && event.data?.type === "streamforge:overlay-ready") {
@@ -225,6 +282,34 @@ function bindGlobalEvents() {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeSidebar();
   });
+}
+
+function prepareEnhancedControls() {
+  const accentOverride = $('[data-alert-variant-field="accentColor"]');
+  if (accentOverride) {
+    accentOverride.type = "text";
+    accentOverride.placeholder = "Inherit, or enter #ffb454";
+    accentOverride.pattern = "^#[0-9a-fA-F]{6}$";
+  }
+  for (const [field, label, accept] of [
+    ["imageUrl", "Upload event image", "image/png,image/webp,image/gif"],
+    ["soundUrl", "Upload event sound", "audio/mpeg,audio/ogg,audio/wav"],
+  ]) {
+    const target = $(`[data-alert-variant-field="${field}"]`);
+    if (!target || target.dataset.uploadEnhanced) continue;
+    target.dataset.uploadEnhanced = "true";
+    if (!target.id) target.id = `alertVariant${field}`;
+    const pickerLabel = document.createElement("label");
+    pickerLabel.className = "asset-button asset-button--inline";
+    pickerLabel.textContent = label;
+    const picker = document.createElement("input");
+    picker.type = "file";
+    picker.accept = accept;
+    picker.dataset.assetPicker = "";
+    picker.dataset.assetTarget = `#${target.id}`;
+    pickerLabel.append(picker);
+    target.closest("label")?.insertAdjacentElement("afterend", pickerLabel);
+  }
 }
 
 async function login(event) {
@@ -281,13 +366,13 @@ function routeTitle(route) {
   return {
     overview: "Overview", services: "Services", chat: "Twitch Chat", alerts: "Alerts",
     reactives: "Reactive Scene", timer: "Stream Timer", spotify: "Now Playing",
-    twitch: "Twitch Commands", discord: "Discord Bot", settings: "Backup & Settings"
+    poll: "Chat Poll", twitch: "Twitch Commands", discord: "Discord Bot", settings: "Backup & Settings"
   }[route] || "Control Room";
 }
 
 async function loadRoute(route) {
   if (route === "overview") await refreshStatus();
-  if (route === "services") await loadServices();
+  if (route === "services") await Promise.allSettled([loadServices(), loadServicePresets()]);
   if (PROFILE_TYPES.includes(route)) await loadProfiles(route);
   if (route === "reactives") await loadReactiveChannels();
   if (route === "spotify") await loadSettings("spotify");
@@ -360,7 +445,9 @@ async function refreshStatus(showToast = false) {
 
 function renderStatus(data) {
   const services = data.services || [];
-  const running = services.filter((service) => service.status === "running").length;
+  const running = services.filter((service) => (
+    typeof service.status === "string" ? service.status : service.status?.state
+  ) === "running").length;
   $("#serverState").textContent = data.ok === false ? "Needs attention" : "Online";
   $("#uptimeText").textContent = `Uptime ${formatDuration(data.uptimeSeconds || 0)}`;
   $("#runningServices").textContent = String(data.runningServices ?? running);
@@ -377,28 +464,37 @@ function renderStatus(data) {
   const derivedMemoryPercent = hostMemory.totalBytes
     ? (Number(hostMemory.usedBytes) / Number(hostMemory.totalBytes)) * 100
     : 0;
-  const memoryPercent = clamp(data.device?.memoryPercent ?? data.memoryPercent ?? derivedMemoryPercent, 0, 100);
-  const storagePercent = clamp(data.device?.storagePercent ?? 0, 0, 100);
-  const batteryPercent = clamp(data.device?.batteryPercent ?? 0, 0, 100);
+  const memoryPercent = finitePercent(data.device?.memoryPercent ?? data.memoryPercent ?? derivedMemoryPercent);
+  const storagePercent = finitePercent(data.device?.storagePercent);
+  const batteryPercent = finitePercent(data.device?.batteryPercent);
   setMeter("memory", memoryPercent);
   setMeter("storage", storagePercent);
   setMeter("battery", batteryPercent);
-  setMeter("load", clamp(data.device?.loadPercent ?? memoryPercent, 0, 100));
+  setMeter("load", finitePercent(data.device?.loadPercent ?? memoryPercent));
   const processMemoryMb = data.device?.memoryMb ?? (hostMemory.processBytes ? Math.round(hostMemory.processBytes / 1048576) : null);
   $("#memoryText").textContent = processMemoryMb
     ? `${processMemoryMb} MB used by StreamForge`
     : "Low-power single process";
   if (data.device?.temperatureC != null) {
     $("#temperatureBadge").textContent = `${Math.round(data.device.temperatureC)}°C`;
+  } else {
+    $("#temperatureBadge").textContent = "NO SENSOR";
   }
+  const unavailable = Object.entries(data.device?.availability || {})
+    .filter(([, value]) => value?.available === false && value.reason)
+    .map(([name, value]) => `${name}: ${value.reason}`);
+  $("#healthNote").textContent = unavailable.length
+    ? unavailable.join(" · ")
+    : "CPU, storage, battery, and temperature readings are live.";
 }
 
 function renderDiscordStatus(discord) {
   const connected = Boolean(discord.connected || discord.ready);
+  const diagnostic = discord.connectionDiagnostic?.message || discord.connectionError || "";
   $("#discordState").textContent = connected ? "Connected" : (discord.configured ? "Offline" : "Not configured");
   $("#discordDetail").textContent = connected
     ? (discord.guildName || discord.username || "Gateway ready")
-    : (discord.configured ? "Check the bot connection" : "Add a bot token to connect");
+    : (diagnostic || (discord.configured ? "Check the bot connection" : "Add a bot token to connect"));
   const pill = $("#discordConnectionPill");
   pill.classList.toggle("is-online", connected);
   pill.classList.toggle("is-offline", !connected);
@@ -406,6 +502,7 @@ function renderDiscordStatus(discord) {
   $("#discordBotUser").textContent = discord.username || discord.botUser || "—";
   $("#discordGuild").textContent = discord.guildName || "—";
   $("#discordPing").textContent = discord.pingMs != null ? `${discord.pingMs} ms` : "—";
+  if ($("#discordConnectionError") && diagnostic) $("#discordConnectionError").textContent = diagnostic;
 }
 
 function renderSpotifyStatus(spotify) {
@@ -436,10 +533,17 @@ function renderTwitchStatus(twitch = {}) {
 }
 
 function setMeter(name, value) {
-  $(`#${name}Meter`).style.width = `${value}%`;
+  const available = Number.isFinite(value);
+  $(`#${name}Meter`).style.width = `${available ? value : 0}%`;
   const percent = $(`#${name}Percent`);
-  if (percent) percent.textContent = value ? `${Math.round(value)}%` : "—";
-  if (name === "load") $("#loadPercent").textContent = value ? `${Math.round(value)}%` : "—";
+  if (percent) percent.textContent = available ? `${Math.round(value)}%` : "—";
+  if (name === "load") $("#loadPercent").textContent = available ? `${Math.round(value)}%` : "—";
+}
+
+function finitePercent(value) {
+  if (value == null || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? clamp(number, 0, 100) : null;
 }
 
 function formatDuration(seconds) {
@@ -485,6 +589,40 @@ async function loadServices() {
   }
 }
 
+async function loadServicePresets() {
+  const select = $("#servicePresetSelect");
+  if (!select || state.servicePresets.length) return;
+  try {
+    const data = await api("/api/services/presets");
+    state.servicePresets = data?.presets || [];
+    for (const preset of state.servicePresets) {
+      const option = document.createElement("option");
+      option.value = preset.id;
+      option.textContent = `${preset.name} · ${preset.description}`;
+      select.append(option);
+    }
+  } catch (error) {
+    toast(`Service templates unavailable: ${error.message}`, "error");
+  }
+}
+
+function useServicePreset() {
+  const preset = state.servicePresets.find((item) => item.id === $("#servicePresetSelect")?.value);
+  if (!preset) {
+    toast("Choose a service template first.", "error");
+    return;
+  }
+  const form = $("#serviceForm");
+  form.elements.name.value = preset.name || "";
+  form.elements.id.value = preset.id || "";
+  form.elements.command.value = preset.command || "";
+  form.elements.args.value = (preset.args || []).join("\n");
+  form.elements.cwd.value = preset.cwd || "";
+  form.elements.enabled.checked = false;
+  form.elements.autostart.checked = false;
+  $("#serviceDialog").showModal();
+}
+
 function renderServices(services) {
   const list = $("#serviceList");
   list.innerHTML = "";
@@ -504,11 +642,17 @@ function renderServices(services) {
       <div class="service-actions">
         <button class="button button--primary" type="button" data-action="${running ? "restart" : "start"}">${running ? "Restart" : "Start"}</button>
         <button class="button button--secondary" type="button" data-action="stop" ${running ? "" : "disabled"}>Stop</button>
+        <button class="button button--secondary" type="button" data-service-logs>Logs</button>
       </div>`;
     $("h2", card).textContent = service.name || service.id;
     $("header small", card).textContent = service.id;
     const commandSummary = [service.command, ...(service.args || [])].filter(Boolean).join(" ");
-    $("p", card).textContent = commandSummary || "Allowlisted local service.";
+    const statusDetail = serviceStatus.lastError?.message || (
+      serviceStatus.lastExit && !serviceStatus.lastExit.expected
+        ? `Last exit: ${serviceStatus.lastExit.code ?? serviceStatus.lastExit.signal ?? "unknown"}`
+        : ""
+    );
+    $("p", card).textContent = statusDetail || commandSummary || "Allowlisted local service.";
     const stats = $$(".service-stats strong", card);
     stats[0].textContent = serviceStatus.state || "stopped";
     stats[1].textContent = running && serviceStatus.startedAt
@@ -516,7 +660,21 @@ function renderServices(services) {
       : "—";
     stats[2].textContent = String(serviceStatus.restarts || 0);
     $$("[data-action]", card).forEach((button) => button.addEventListener("click", () => serviceAction(service.id, button.dataset.action)));
+    $("[data-service-logs]", card).addEventListener("click", () => showServiceLogs(service));
     list.append(card);
+  }
+}
+
+async function showServiceLogs(service) {
+  const dialog = $("#serviceLogDialog");
+  $("#serviceLogTitle").textContent = `${service.name || service.id} log`;
+  $("#serviceLogOutput").textContent = "Loading…";
+  dialog.showModal();
+  try {
+    const data = await api(`/api/services/${encodeURIComponent(service.id)}/logs?maxBytes=131072`);
+    $("#serviceLogOutput").textContent = data?.log?.text || "No log output yet.";
+  } catch (error) {
+    $("#serviceLogOutput").textContent = error.message;
   }
 }
 
@@ -582,7 +740,13 @@ function bindProfileForm(form) {
   form.addEventListener("input", (event) => {
     updateRangeOutput(event.target);
     markDirty(form);
-    syncCurrentProfileFromForm(type);
+    if (type === "alerts" && event.target.dataset.alertVariantField) {
+      syncAlertVariantField(event.target);
+    } else if (type === "poll" && event.target.dataset.pollChoice) {
+      syncPollChoices(form);
+    } else {
+      syncCurrentProfileFromForm(type);
+    }
     if (type === "reactives" && ["width", "height", "backgroundColor"].includes(event.target.name)) renderReactiveStage();
     postPreviewConfig(type);
   });
@@ -627,16 +791,25 @@ function applyCurrentProfile(type) {
   const form = $(`[data-profile-form="${type}"]`);
   const profile = getCurrentProfile(type);
   if (!form || !profile) return;
+  const defaults = DEFAULT_PROFILES[type] || {};
   for (const element of form.elements) {
-    if (!element.name || !(element.name in profile)) continue;
-    if (element.type === "checkbox") element.checked = Boolean(profile[element.name]);
-    else element.value = profile[element.name] ?? "";
+    if (!element.name) continue;
+    const value = Object.hasOwn(profile, element.name)
+      ? profile[element.name]
+      : defaults[element.name];
+    if (element.type === "checkbox") element.checked = Boolean(value);
+    else element.value = value ?? "";
     updateRangeOutput(element);
   }
   if (type === "reactives") {
-    profile.participants ||= [];
+    profile.participants ||= structuredClone(defaults.participants || []);
     renderParticipants();
     renderReactiveStage();
+  }
+  if (type === "alerts") renderAlertVariantFields();
+  if (type === "poll") {
+    profile.choices ||= structuredClone(defaults.choices || []);
+    renderPollChoiceFields(profile);
   }
   setSaved(form);
   updateOverlayUrl(type);
@@ -661,7 +834,9 @@ function formValues(form) {
     if (element.dataset.secret !== undefined && !element.value) continue;
     if (element.type === "checkbox") values[element.name] = element.checked;
     else if (NUMBER_FIELDS.has(element.name) || element.type === "number" || element.type === "range") values[element.name] = Number(element.value);
-    else values[element.name] = element.value;
+    else values[element.name] = element.name === "customCss"
+      ? element.value.slice(0, 20_000)
+      : element.value;
   }
   return values;
 }
@@ -800,26 +975,106 @@ async function testOverlay(type) {
       eventType: $("#alertPreviewEvent")?.value || "follow",
       user: "ForgeViewer",
       amount: 100,
-      message: "Welcome to the forge."
+      message: ""
     },
     reactives: {
       participantId: profile.participants?.[0]?.id,
       userId: profile.participants?.[0]?.discordUserId,
       speaking: true
     },
-    spotify: { track: { name: "Midnight Circuit", artist: "Signal Array", album: "Afterglow", progressMs: 74000, durationMs: 218000 } }
+    spotify: { track: { name: "Midnight Circuit", artist: "Signal Array", album: "Afterglow", progressMs: 74000, durationMs: 218000 } },
+    poll: {
+      status: "active", question: profile.question, choices: (profile.choices || []).map((choice, index) => ({
+        ...choice, count: index === 0 ? 18 : 12, percentage: index === 0 ? 60 : 40
+      })), totalVotes: 30, remainingSeconds: 42
+    }
   }[type] || {};
   const iframe = $(`[data-overlay-preview="${type}"]`);
   iframe?.contentWindow?.postMessage({
     type: "streamforge:event",
     event: { type: `${type}.test`, payload: sample }
   }, location.origin);
+  toast(`Preview ${type === "reactives" ? "voice activity" : type} shown locally.`);
+}
+
+function alertVariantKey() {
+  return $("#alertPreviewEvent")?.value || "follow";
+}
+
+function renderAlertVariantFields() {
+  const profile = getCurrentProfile("alerts");
+  if (!profile) return;
+  const variant = profile.eventVariants?.[alertVariantKey()] || {};
+  $$("[data-alert-variant-field]").forEach((input) => {
+    const value = variant[input.dataset.alertVariantField];
+    if (input.type === "checkbox") input.checked = Boolean(value);
+    else input.value = value ?? "";
+  });
+}
+
+function syncAlertVariantField(input) {
+  const profile = getCurrentProfile("alerts");
+  if (!profile) return;
+  profile.eventVariants ||= {};
+  const key = alertVariantKey();
+  const variant = { ...(profile.eventVariants[key] || {}) };
+  const field = input.dataset.alertVariantField;
+  const value = input.type === "checkbox"
+    ? input.checked
+    : input.type === "number" || input.type === "range"
+      ? Number(input.value)
+      : input.value;
+  if (value === "" || value === false) delete variant[field];
+  else variant[field] = value;
+  if (Object.keys(variant).length) profile.eventVariants[key] = variant;
+  else delete profile.eventVariants[key];
+}
+
+function renderPollChoiceFields(profile = getCurrentProfile("poll")) {
+  const choices = profile?.choices || [];
+  $$("[data-poll-choice]").forEach((input) => {
+    const [index, field] = input.dataset.pollChoice.split(".");
+    input.value = choices[Number(index)]?.[field] || "";
+  });
+}
+
+function syncPollChoices(form = $('[data-profile-form="poll"]')) {
+  const profile = getCurrentProfile("poll");
+  if (!profile || !form) return;
+  profile.choices = [0, 1].map((index) => ({
+    label: $(`[data-poll-choice="${index}.label"]`, form)?.value.trim() || `Option ${index + 1}`,
+    token: $(`[data-poll-choice="${index}.token"]`, form)?.value.trim() || String(index + 1)
+  }));
+}
+
+async function uploadAsset(event) {
+  const picker = event.currentTarget;
+  const file = picker.files?.[0];
+  if (!file) return;
+  picker.disabled = true;
   try {
-    await api(`/api/overlays/${type}/test`, { method: "POST", body: { profileId: profile.id, ...sample } });
-    toast(`Test ${type === "reactives" ? "voice activity" : type} sent.`);
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.addEventListener("load", () => resolve(reader.result));
+      reader.addEventListener("error", () => reject(reader.error || new Error("Could not read the asset.")));
+      reader.readAsDataURL(file);
+    });
+    const result = await api("/api/assets", {
+      method: "POST",
+      body: { name: file.name, mimeType: file.type, data }
+    });
+    const target = picker.dataset.assetTarget
+      ? document.querySelector(picker.dataset.assetTarget)
+      : picker.closest("[data-asset-row]")?.querySelector("input[type='url'], input[type='text']");
+    if (!target || !result?.asset?.url) throw new Error("The asset service did not return a URL.");
+    target.value = result.asset.url;
+    target.dispatchEvent(new Event("input", { bubbles: true }));
+    toast(`${file.name} uploaded.`);
   } catch (error) {
-    if (error.status === 404) toast("Preview test shown locally; server broadcast is not available yet.");
-    else toast(error.message, "error");
+    toast(error.message, "error");
+  } finally {
+    picker.disabled = false;
+    picker.value = "";
   }
 }
 
@@ -843,6 +1098,7 @@ function renderParticipants() {
         postPreviewConfig("reactives");
       });
     });
+    $$("[data-asset-picker]", card).forEach((input) => input.addEventListener("change", uploadAsset));
     $("[data-remove-participant]", card).addEventListener("click", () => removeParticipant(participant.id));
     list.append(fragment);
   }
@@ -881,8 +1137,13 @@ function removeParticipant(id) {
 function renderReactiveStage() {
   const profile = getCurrentProfile("reactives");
   const stage = $("#sceneStage");
-  if (!profile) return;
+  if (!profile || !stage) return;
   stage.style.backgroundColor = profile.backgroundColor || "#121923";
+  stage.style.aspectRatio = `${Math.max(1, Number(profile.width) || 1920)} / ${Math.max(1, Number(profile.height) || 1080)}`;
+  if (stage.querySelector("iframe")) {
+    postPreviewConfig("reactives");
+    return;
+  }
   $("#canvasSize").textContent = `${profile.width || 1920} × ${profile.height || 1080}`;
   stage.innerHTML = "";
   for (const participant of profile.participants || []) {
@@ -951,6 +1212,24 @@ async function controlTimer(action) {
       body: { action, seconds: action === "add" ? Number(profile.secondsPerEvent) || 0 : undefined }
     });
     toast(`Timer ${action} command sent.`);
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function controlPoll(action) {
+  const profile = getCurrentProfile("poll");
+  if (!profile?._persisted) {
+    toast("Save this poll profile before using live controls.", "error");
+    return;
+  }
+  if (action === "reset" && !window.confirm("Clear every vote and reset this poll?")) return;
+  try {
+    await api(`/api/polls/${encodeURIComponent(profile.id)}/control`, {
+      method: "POST",
+      body: { action }
+    });
+    toast(`Poll ${action} command sent.`);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -1029,9 +1308,14 @@ async function loadSettings(scope) {
     if (scope === "general") {
       state.publicOrigin = data.publicOrigin || location.origin;
       PROFILE_TYPES.forEach(updateOverlayUrl);
-      $("#backupProviderState").textContent = data.backupConnected
-        ? String(data.backupProvider || "cloud").replace("-", " ")
-        : "LOCAL ONLY";
+      renderBackupStatus(response?.backup || {
+        cloudConfigured: data.backupConnected,
+        configuration: {
+          provider: data.backupProvider,
+          retention: data.backupRetention,
+          folder: data.backupFolder
+        }
+      });
     }
     if (scope === "discord") {
       renderDiscordConfiguration(response, data);
@@ -1082,8 +1366,10 @@ function renderDiscordConfiguration(response = {}, fallback = {}) {
   const stateTag = $("#discordCredentialState");
   stateTag.textContent = botTokenConfigured ? (clientSecretConfigured ? "BOT + LOGIN READY" : "BOT READY") : "SETUP REQUIRED";
   const connectionError =
+    response?.status?.connectionDiagnostic?.message ||
     response?.connectionError ||
     response?.status?.connectionError ||
+    settings.connectionDiagnostic?.message ||
     settings.connectionError ||
     fallback.connectionError ||
     "";
@@ -1101,13 +1387,22 @@ function renderSpotifyConfiguration(response = {}, fallback = {}) {
   if (input) input.placeholder = configured ? "Configured ••••••••" : "Spotify app secret";
   setCredentialFlag("#spotifyClientSecretFlag", "Client secret", configured);
   const connect = $("#spotifyConnectButton");
-  const ready = Boolean(settings.clientId && settings.redirectUri && configured);
+  const redirectValidation = response?.redirectValidation || settings.redirectValidation || {};
+  const redirectValid = redirectValidation.valid !== false;
+  const ready = Boolean(settings.clientId && settings.redirectUri && configured && redirectValid);
   if (connect) {
     connect.classList.toggle("is-disabled", !ready);
     connect.setAttribute("aria-disabled", String(!ready));
-    connect.title = ready ? "Authorize Spotify" : "Save Spotify app credentials first";
+    connect.title = ready
+      ? "Authorize Spotify"
+      : redirectValidation.error || "Save valid Spotify app credentials first";
   }
-  $("#spotifySetupError").textContent = response?.status?.error || "";
+  $("#spotifySetupError").textContent = redirectValidation.error || response?.status?.error || "";
+  const suggested = $("#spotifyUseSuggestedRedirect");
+  if (suggested) {
+    suggested.hidden = !redirectValidation.suggestedUri;
+    suggested.dataset.suggestedUri = redirectValidation.suggestedUri || "";
+  }
 }
 
 async function disconnectSpotify() {
@@ -1176,7 +1471,7 @@ function renderTwitchCommands() {
       </div>
       <div class="field-row field-row--three">
         <label class="field"><span>Trigger</span><div class="input-suffix"><span>!</span><input data-command-field="trigger" maxlength="32"></div></label>
-        <label class="field"><span>Action</span><select data-command-field="action"><option value="custom">Custom reply</option><option value="now-playing">Current song</option><option value="playlist">Playlist link</option><option value="song-request">Song request</option></select></label>
+        <label class="field"><span>Action</span><select data-command-field="action"><option value="custom">Custom reply</option><option value="now-playing">Current song</option><option value="playlist">Spotify playlist / album</option><option value="song-request">Song request</option><option value="uptime">StreamForge uptime</option></select></label>
         <label class="field"><span>Who can use it</span><select data-command-field="permission"><option value="everyone">Everyone</option><option value="subscriber">Subscribers</option><option value="moderator">Moderators</option><option value="broadcaster">Broadcaster</option></select></label>
       </div>
       <label class="field"><span>Reply template</span><input data-command-field="response" maxlength="450"><small>Variables: {user}, {args}, {song}, {artist}, {playlist}.</small></label>
@@ -1242,14 +1537,16 @@ function renderTwitchCommandPreview() {
     custom: command.response || "{user}: {args}",
     "now-playing": command.response || "Now playing: {song} — {artist}",
     playlist: command.response || "Stream playlist: {playlist}",
-    "song-request": command.response || "{user}, queued {song}."
+    "song-request": command.response || "{user}, queued {song}.",
+    uptime: command.response || "StreamForge has been online for {uptime}."
   };
   output.textContent = templates[command.action]
     .replaceAll("{user}", "ForgeViewer")
     .replaceAll("{args}", args.join(" "))
     .replaceAll("{song}", command.action === "song-request" ? args.join(" ") || "your song" : "Midnight Circuit")
     .replaceAll("{artist}", "Signal Array")
-    .replaceAll("{playlist}", $('[data-settings-form="twitch"] [name="playlistUrl"]')?.value || "https://open.spotify.com/playlist/…");
+    .replaceAll("{playlist}", $('[data-settings-form="twitch"] [name="playlistUrl"]')?.value || "Current Spotify album")
+    .replaceAll("{uptime}", "2h 14m");
 }
 
 async function testTwitchConnection() {
@@ -1285,7 +1582,15 @@ async function runBackup() {
   try {
     await api("/api/backups/run", { method: "POST" });
     toast("Backup started.");
-    window.setTimeout(() => loadBackups(), 1_000);
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+      const status = await loadBackups();
+      if (!status?.running) {
+        if (status?.lastResult?.ok) toast("Backup completed and verified.");
+        else if (status?.lastResult) toast(status.lastResult.output || "Backup failed.", "error");
+        break;
+      }
+    }
   } catch (error) {
     toast(error.message, "error");
   } finally {
@@ -1296,8 +1601,9 @@ async function runBackup() {
 
 async function backupAction(action) {
   try {
-    await api(`/api/backups/${action}`, { method: "POST" });
+    const result = await api(`/api/backups/${action}`, { method: "POST" });
     toast("Backup destination is reachable.");
+    if (result?.configuration || result?.lastResult) renderBackupStatus(result);
   } catch (error) {
     toast(error.message, "error");
   }
@@ -1307,6 +1613,7 @@ async function loadBackups() {
   const body = $("#backupList");
   try {
     const data = await api("/api/backups");
+    renderBackupStatus(data);
     const backups = Array.isArray(data)
       ? data
       : data?.backups || (data?.lastResult ? [{
@@ -1317,8 +1624,8 @@ async function loadBackups() {
       }] : []);
     body.innerHTML = "";
     if (!backups.length) {
-      body.innerHTML = '<tr><td colspan="4" class="table-empty">No backups yet.</td></tr>';
-      return;
+      body.innerHTML = '<tr><td colspan="5" class="table-empty">No backups yet.</td></tr>';
+      return data;
     }
     for (const backup of backups) {
       const row = document.createElement("tr");
@@ -1326,6 +1633,7 @@ async function loadBackups() {
         new Date(backup.createdAt).toLocaleString(),
         backup.destination || "Local",
         formatBytes(backup.sizeBytes),
+        backup.checksumPresent === false ? "missing" : "SHA-256",
         backup.status || "complete"
       ]) {
         const cell = document.createElement("td");
@@ -1334,16 +1642,187 @@ async function loadBackups() {
       }
       body.append(row);
     }
+    return data;
   } catch (error) {
     body.innerHTML = "";
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 4;
+    cell.colSpan = 5;
     cell.className = "table-empty";
     cell.textContent = error.message;
     row.append(cell);
     body.append(row);
+    return null;
   }
+}
+
+function renderBackupStatus(data = {}) {
+  const configuration = data.configuration || {};
+  const providerState = $("#backupProviderState");
+  if (providerState) {
+    providerState.textContent = data.cloudConfigured
+      ? data.cloudActive || configuration.cloudActive
+        ? `${String(configuration.provider || "rclone").replaceAll("-", " ").toUpperCase()} READY`
+        : "CLOUD CONNECTED · LOCAL ACTIVE"
+      : "LOCAL ONLY";
+    providerState.classList.toggle("is-connected", Boolean(data.cloudConfigured));
+  }
+  if (!state.googleDriveFlowId) {
+    if (
+      data.cloudConfigured &&
+      ["rclone", "local"].includes(configuration.provider)
+    ) {
+      renderGoogleDriveFlow({
+        state: "connected",
+        remotePath: configuration.folder,
+      });
+    } else if (!data.cloudConfigured) {
+      renderGoogleDriveFlow({ state: "idle" });
+    }
+  }
+
+  const contents = $("#backupContents");
+  if (contents) {
+    const items = [
+      ...(configuration.contents || []),
+      ...(configuration.exclusions || []).map((item) => `Excluded: ${item}`)
+    ];
+    if (items.length) {
+      contents.innerHTML = "";
+      for (const text of items) {
+        const item = document.createElement("li");
+        item.textContent = text;
+        contents.append(item);
+      }
+    }
+  }
+
+  const result = data.lastResult;
+  const output = $("#backupLastResult");
+  if (!output) return;
+  if (!result) {
+    output.textContent = data.running
+      ? "Backup is running. This panel updates automatically."
+      : "No backup has run during this server session.";
+    output.classList.remove("is-error", "is-success");
+    return;
+  }
+  const at = result.at ? new Date(result.at).toLocaleString() : "unknown time";
+  const destination = result.uploaded ? "local archive and cloud copy" : "local archive";
+  output.textContent = result.ok
+    ? `Last backup succeeded at ${at}: ${destination}.`
+    : `Last backup failed at ${at}: ${result.output || "No diagnostic output was returned."}`;
+  output.classList.toggle("is-error", !result.ok);
+  output.classList.toggle("is-success", Boolean(result.ok));
+}
+
+async function startGoogleDriveSetup() {
+  const scope = $("#googleDriveScope")?.value || "drive.file";
+  if (
+    scope === "drive" &&
+    !window.confirm("Full Drive access lets this rclone remote read and modify every file in your Google Drive. Continue?")
+  ) return;
+  const button = $("#startGoogleDriveSetup");
+  button.disabled = true;
+  try {
+    const response = await api("/api/backups/google/setup/start", {
+      method: "POST",
+      body: {
+        remoteName: $("#googleDriveRemoteName")?.value,
+        remotePath: $("#googleDriveRemotePath")?.value,
+        scope
+      }
+    });
+    state.googleDriveFlowId = response.flow.id;
+    renderGoogleDriveFlow(response.flow);
+    scheduleGoogleDrivePoll();
+  } catch (error) {
+    toast(error.message, "error");
+    button.disabled = false;
+  }
+}
+
+function scheduleGoogleDrivePoll() {
+  window.clearTimeout(state.googleDrivePollTimer);
+  if (!state.googleDriveFlowId) return;
+  state.googleDrivePollTimer = window.setTimeout(pollGoogleDriveSetup, 1_000);
+}
+
+async function pollGoogleDriveSetup() {
+  if (!state.googleDriveFlowId) return;
+  try {
+    const response = await api(`/api/backups/google/setup/${encodeURIComponent(state.googleDriveFlowId)}`);
+    const flow = response.flow;
+    renderGoogleDriveFlow(flow);
+    if (["connected", "failed", "cancelled", "expired"].includes(flow.state)) {
+      state.googleDriveFlowId = null;
+      if (flow.state === "connected") {
+        toast("Google Drive connected. New backups will include a cloud copy.");
+        await loadBackups();
+      } else if (flow.state === "failed") {
+        toast(flow.error || "Google Drive setup failed.", "error");
+      }
+      return;
+    }
+    scheduleGoogleDrivePoll();
+  } catch (error) {
+    state.googleDriveFlowId = null;
+    renderGoogleDriveFlow({ state: "failed", error: error.message });
+    toast(error.message, "error");
+  }
+}
+
+async function cancelGoogleDriveSetup() {
+  if (!state.googleDriveFlowId) return;
+  try {
+    const response = await api(
+      `/api/backups/google/setup/${encodeURIComponent(state.googleDriveFlowId)}/cancel`,
+      { method: "POST" }
+    );
+    renderGoogleDriveFlow(response.flow);
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    state.googleDriveFlowId = null;
+    window.clearTimeout(state.googleDrivePollTimer);
+  }
+}
+
+function renderGoogleDriveFlow(flow = {}) {
+  const currentState = flow.state || "idle";
+  const stateTag = $("#googleDriveSetupState");
+  const message = $("#googleDriveSetupMessage");
+  const authLink = $("#googleDriveAuthLink");
+  const start = $("#startGoogleDriveSetup");
+  const cancel = $("#cancelGoogleDriveSetup");
+  const terminal = ["connected", "failed", "cancelled", "expired", "idle"].includes(currentState);
+  const messages = {
+    idle: "Start the guided login, then open Google's authorization link on the Android phone running StreamForge.",
+    starting: "Creating a restricted rclone connection…",
+    authorizing: "Preparing Google's secure authorization page…",
+    "awaiting-google": "Open this link on the StreamForge phone and approve access. This page will continue automatically.",
+    finalizing: "Google approved access. Finishing the rclone connection…",
+    verifying: "Verifying that the connected Drive can be reached…",
+    connected: "Connected. Future backups will be stored locally and copied to Google Drive.",
+    failed: flow.error || "Google Drive setup failed. Check rclone and try again.",
+    cancelled: "Google Drive setup was cancelled. No active connection was saved.",
+    expired: "The setup window expired. Start again when you are ready to approve access."
+  };
+  if (stateTag) {
+    stateTag.textContent = currentState.replaceAll("-", " ").toUpperCase();
+    stateTag.classList.toggle("is-connected", currentState === "connected");
+  }
+  if (message) message.textContent = messages[currentState] || "Google Drive setup is updating…";
+  if (authLink) {
+    authLink.hidden = !flow.authUrl;
+    if (flow.authUrl) authLink.href = flow.authUrl;
+    else authLink.removeAttribute("href");
+  }
+  if (start) {
+    start.disabled = !terminal;
+    start.textContent = currentState === "connected" ? "Reconnect Google Drive" : "Connect Google Drive";
+  }
+  if (cancel) cancel.hidden = terminal;
 }
 
 function formatBytes(bytes) {

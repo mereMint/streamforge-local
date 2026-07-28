@@ -20,6 +20,28 @@ test("service specs stay shell-free and bounded", () => {
 test("service specs reject unsafe identifiers and null bytes", () => {
   assert.throws(() => validateSpec({ id: "../bad", command: "node" }));
   assert.throws(() => validateSpec({ id: "good", command: "node\0bad" }));
+  assert.throws(() => validateSpec({ id: "good", name: "fake\nentry", command: "node" }));
+});
+
+test("service save validates cwd and presets remain safely disabled", async (context) => {
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "streamforge-service-save-"));
+  context.after(() => fs.rm(dataDir, { recursive: true, force: true }));
+  const manager = new ServiceManager({
+    config: { dataDir, repoRoot: dataDir, serviceEditEnabled: true },
+    db: { saveService: async () => {}, listServices: async () => [] },
+  });
+  await assert.rejects(
+    manager.save({ id: "missing", command: "node", cwd: "does-not-exist" }),
+    /does not exist/,
+  );
+  const file = path.join(dataDir, "not-a-directory");
+  await fs.writeFile(file, "x");
+  await assert.rejects(
+    manager.save({ id: "file-cwd", command: "node", cwd: file }),
+    /must be a directory/,
+  );
+  assert.ok(manager.presets().length >= 2);
+  assert.ok(manager.presets().every((preset) => preset.enabled === false && preset.autostart === false));
 });
 
 test("service manager starts, restarts, logs, and stops a real process", async (context) => {
@@ -51,7 +73,16 @@ test("service manager starts, restarts, logs, and stops a real process", async (
 
   const stopped = await manager.stop(spec.id);
   assert.equal(stopped.state, "stopped");
+  assert.equal(stopped.restarts, 1);
+  assert.equal(stopped.lastExit.expected, true);
+  assert.ok(stopped.lastRestartAt);
   const log = await fs.readFile(path.join(dataDir, "logs", "test-worker.log"), "utf8");
   assert.match(log, /starting Test worker/);
   assert.match(log, /exited code=/);
+  const tail = await manager.tailLogs(spec.id, { maxBytes: 40 });
+  assert.equal(tail.bytes, 40);
+  assert.equal(tail.truncated, true);
+  assert.match(tail.text, /exited code=/);
+  await assert.rejects(manager.tailLogs("../bad"), /invalid/);
+  await assert.rejects(manager.tailLogs(spec.id, { maxBytes: 300_000 }), /between/);
 });

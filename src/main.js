@@ -6,9 +6,12 @@ import { AuthManager, Vault } from "./auth.js";
 import { BackupManager } from "./backup-manager.js";
 import { loadConfig, describeConfig } from "./config.js";
 import { createDatabase } from "./database.js";
+import { createDeviceMetrics } from "./device-metrics.js";
 import { createDiscordBot } from "./discord-bot.js";
 import { createHttpServer } from "./http-server.js";
 import { RealtimeHub } from "./realtime.js";
+import { PollManager } from "./poll-manager.js";
+import { GoogleDriveSetupManager } from "./google-drive-setup.js";
 import { ServiceManager } from "./service-manager.js";
 import { SpotifyManager } from "./spotify.js";
 import { TwitchManager } from "./twitch.js";
@@ -68,11 +71,17 @@ async function bootstrap() {
   Object.assign(config.spotify, savedSpotify, savedSpotifySecrets);
   const auth = new AuthManager(config);
   const backups = new BackupManager(config);
+  const generalSettings = db.getSetting("settings:general", {});
+  backups.configure(generalSettings);
+  if (generalSettings.backupRemote) backups.setRcloneRemote(generalSettings.backupRemote);
+  const deviceMetrics = createDeviceMetrics({ dataDir: config.dataDir });
 
   let discord;
   let spotify;
   let twitch;
   let services;
+  let polls;
+  let googleDriveSetup;
 
   const getStatus = async () => {
     const memory = process.memoryUsage();
@@ -95,6 +104,7 @@ async function bootstrap() {
           processBytes: memory.rss,
         },
       },
+      device: await deviceMetrics.collect(),
       urls: localAddresses(config.port, new URL(config.publicBaseUrl).protocol),
       services: services ? await services.list() : [],
       discord: discord?.status?.() || { configured: false, connected: false },
@@ -112,6 +122,26 @@ async function bootstrap() {
   });
   spotify = new SpotifyManager({ config, db, vault, hub });
   twitch = new TwitchManager({ config, db, vault, spotify, hub });
+  polls = new PollManager({ db, hub });
+  googleDriveSetup = new GoogleDriveSetupManager({
+    onConnected: async ({ remoteName, remotePath, scope }) => {
+      const remote = `${remoteName}:`;
+      const current = db.getSetting("settings:general", {});
+      await db.setSetting("settings:general", {
+        ...current,
+        backupProvider: "rclone",
+        backupRemote: remote,
+        backupFolder: remotePath,
+        backupGoogleScope: scope,
+      });
+      backups.setRcloneRemote(remote);
+      backups.configure({
+        ...current,
+        backupProvider: "rclone",
+        backupFolder: remotePath,
+      });
+    },
+  });
   discord = createDiscordBot({
     config,
     db,
@@ -140,6 +170,8 @@ async function bootstrap() {
     backups,
     spotify,
     twitch,
+    polls,
+    googleDriveSetup,
     discord,
     hub,
     getStatus,
@@ -168,6 +200,8 @@ async function bootstrap() {
       twitch.stop(),
       discord.stop(),
       services.stopAll(),
+      polls.stopAll(),
+      Promise.resolve(googleDriveSetup.stop()),
       new Promise((resolve) => server.close(resolve)),
     ]);
     await db.close();

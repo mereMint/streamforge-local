@@ -130,6 +130,36 @@ export function normalizeDiscordConfig(config = {}) {
   };
 }
 
+export function discordGatewayIntents(config = {}) {
+  const settings = normalizeDiscordConfig(config);
+  const intents = [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildVoiceStates,
+  ];
+  if (settings.autoRoleId) intents.push(GatewayIntentBits.GuildMembers);
+  return intents;
+}
+
+export function discordConnectionDiagnostic(error, config = {}) {
+  const message = String(error?.message || error || "").trim();
+  if (/disallowed intents/i.test(message)) {
+    return {
+      code: "disallowed-intents",
+      message: normalizeDiscordConfig(config).autoRoleId
+        ? "Discord rejected the Server Members Intent. Enable it in the Developer Portal or disable automatic member roles."
+        : "Discord rejected a gateway intent that is not needed by the current configuration. Restart with the updated intent selection.",
+    };
+  }
+  if (/invalid token|token was invalid|incorrect login/i.test(message)) {
+    return {
+      code: "invalid-token",
+      message: "Discord rejected the bot token. Save a current bot token and reconnect.",
+    };
+  }
+  if (!message) return null;
+  return { code: "connection-error", message };
+}
+
 export function sanitizeVoiceChannelName(value, fallback = "Personal room") {
   const sanitized = String(value ?? "")
     .replace(/[\u0000-\u001f\u007f]/g, "")
@@ -435,11 +465,7 @@ export function createDiscordBot({
   function ensureClient() {
     if (client) return client;
     client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers,
-        GatewayIntentBits.GuildVoiceStates,
-      ],
+      intents: discordGatewayIntents({ discord: settings }),
     });
     attachEvents();
     return client;
@@ -459,6 +485,11 @@ export function createDiscordBot({
       guildName: guild?.name ?? null,
       pingMs: Number.isFinite(client?.ws?.ping) ? Math.round(client.ws.ping) : null,
       connectionError: lastConnectionError,
+      connectionDiagnostic: discordConnectionDiagnostic(
+        lastConnectionError,
+        { discord: settings },
+      ),
+      requiresServerMembersIntent: Boolean(settings.autoRoleId),
       reactiveSpeaking: Boolean(voiceConnection),
       reactiveVoiceChannelId: reactiveChannelId,
       temporaryVoiceChannels: settings.guildId

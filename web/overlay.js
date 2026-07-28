@@ -2,7 +2,7 @@ const params = new URLSearchParams(location.search);
 const overlayType = params.get("type") || "chat";
 const profileId = params.get("profile") || "default";
 const isPreview = params.get("preview") === "1";
-const allowedTypes = new Set(["chat", "alerts", "reactives", "timer", "spotify"]);
+const allowedTypes = new Set(["chat", "alerts", "reactives", "timer", "spotify", "poll"]);
 
 const root = document.querySelector("#overlayRoot");
 const statusNode = document.querySelector("#overlayStatus");
@@ -12,6 +12,7 @@ let ircSocket = null;
 let ircReconnectTimer = null;
 let alertTimer = null;
 let alertQueue = [];
+let alertAudio = null;
 let timerState = { remainingSeconds: 0, running: false, eventCount: 0, updatedAt: Date.now() };
 let spotifyTrack = null;
 let progressInterval = null;
@@ -19,6 +20,7 @@ let spotifyVisibilityTimer = null;
 let spotifyIntervalTimer = null;
 let lastSpotifyTrackId = null;
 let reactiveRoster = new Map();
+let pollState = { status: "idle", choices: [], totalVotes: 0, remainingSeconds: 0 };
 let emoteMap = new Map();
 let emoteRoomId = null;
 
@@ -31,31 +33,42 @@ const fallbacks = {
     showTimestamps: false, showTwitchEmotes: true, showBttvEmotes: true,
     showFfzEmotes: true, showSevenTvEmotes: true, emoteScale: 1,
     blockedUsers: "", blockedBots: "", hideCommands: false, ignoredCommands: "",
-    blockedWords: ""
+    blockedWords: "", accentStyle: "rail", borderWidth: 1, shadowStrength: 35
   },
   alerts: {
     headline: "{user} just followed!", message: "Welcome to the forge.", duration: 7,
     animation: "impact", exitAnimation: "fade", layout: "badge", textColor: "#ffffff",
     accentColor: "#ffb454", backgroundColor: "#101722", radius: 18,
-    fontFamily: "System Sans", position: "center", mediaFit: "cover"
+    fontFamily: "System Sans", position: "center", mediaFit: "cover",
+    imageUrl: "", soundUrl: "", soundVolume: 75, eventVariants: {}
   },
   reactives: {
     width: 1920, height: 1080, backgroundColor: "transparent", participants: [],
     autoAddMembers: true, useDiscordAvatars: true, talkingAnimation: "bounce",
-    mutedStyle: "dim", showNames: true
+    mutedStyle: "dim", showNames: true, avatarShape: "circle", imageFit: "contain",
+    nameStyle: "discord"
   },
   timer: {
     label: "THE FORGE STAYS LIVE", eventType: "follow", secondsPerEvent: 300,
     startingSeconds: 7200, goal: 50, layout: "industrial", textColor: "#f7fbff",
     accentColor: "#37e6b2", backgroundColor: "#0e151d", fontFamily: "Monospace",
     digitSize: 94, panelOpacity: 92, radius: 18, align: "center",
-    showLabel: true, showMeta: true, showProgress: false
+    showLabel: true, showMeta: true, showProgress: false, accentStyle: "rail",
+    digitSpacing: -7, borderWidth: 1, glowStrength: 45
   },
   spotify: {
     displayMode: "change", duration: 12, position: "bottom-left", showAlbumArt: true,
     showProgress: true, layout: "card", textColor: "#ffffff",
     accentColor: "#1ed760", backgroundColor: "#121816", intervalMinutes: 5,
-    animation: "slide"
+    animation: "slide", fontFamily: "System Sans", radius: 18, artShape: "rounded",
+    backdropBlur: 12, showAlbumName: true
+  },
+  poll: {
+    channel: "", question: "What should happen next?",
+    choices: [{ label: "Option 1", token: "1" }, { label: "Option 2", token: "2" }],
+    durationSeconds: 60, allowVoteChanges: true, layout: "arena", animation: "rise",
+    textColor: "#ffffff", accentColor: "#8b7cff", backgroundColor: "#10131d",
+    fontFamily: "System Sans", radius: 18
   }
 };
 
@@ -81,12 +94,12 @@ function rgbTuple(hex) {
 function fontStack(value) {
   return {
     "System Sans": 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-    Rounded: '"Arial Rounded MT Bold", ui-rounded, sans-serif',
-    Monospace: 'ui-monospace, "SFMono-Regular", Consolas, monospace',
-    Serif: 'Georgia, "Times New Roman", serif',
-    Condensed: '"Arial Narrow", "Roboto Condensed", Impact, sans-serif',
-    Humanist: '"Trebuchet MS", "Segoe UI", sans-serif',
-    Geometric: 'Futura, "Century Gothic", Montserrat, sans-serif'
+    Rounded: '"Forge Rounded", ui-rounded, sans-serif',
+    Monospace: '"Forge Mono", ui-monospace, monospace',
+    Serif: '"Forge Serif", Georgia, serif',
+    Condensed: '"Forge Condensed", sans-serif',
+    Humanist: '"Forge Humanist", sans-serif',
+    Geometric: '"Forge Geometric", sans-serif'
   }[value] || 'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 }
 
@@ -109,6 +122,18 @@ function applyConfig(nextConfig) {
   styles.setProperty("--emote-scale", String(Number(config.emoteScale) || 1));
   styles.setProperty("--digit-size", `${Number(config.digitSize ?? 94)}px`);
   styles.setProperty("--panel-opacity", String((Number(config.panelOpacity ?? 92)) / 100));
+  styles.setProperty("--border-width", `${Number(config.borderWidth ?? 1)}px`);
+  styles.setProperty("--shadow-strength", String((Number(config.shadowStrength ?? 35)) / 100));
+  styles.setProperty("--digit-spacing", `${Number(config.digitSpacing ?? -7) / 100}em`);
+  styles.setProperty("--glow-strength", String((Number(config.glowStrength ?? 45)) / 100));
+  styles.setProperty("--backdrop-blur", `${Number(config.backdropBlur ?? 12)}px`);
+  let customStyle = document.querySelector("#customOverlayCss");
+  if (!customStyle) {
+    customStyle = document.createElement("style");
+    customStyle.id = "customOverlayCss";
+    document.head.append(customStyle);
+  }
+  customStyle.textContent = String(config.customCss || "").slice(0, 20_000);
   renderOverlay();
   if (overlayType === "spotify") scheduleSpotifyVisibility(false);
 }
@@ -119,6 +144,7 @@ function renderOverlay() {
   if (overlayType === "reactives") renderReactiveScene();
   if (overlayType === "timer") renderTimer();
   if (overlayType === "spotify") renderSpotify();
+  if (overlayType === "poll") renderPoll();
 }
 
 function renderChatShell() {
@@ -130,6 +156,7 @@ function renderChatShell() {
     root.append(container);
   }
   container.dataset.layout = config.layout || "cards";
+  container.dataset.accentStyle = config.accentStyle || "rail";
 }
 
 function appendChatMessage(message) {
@@ -138,6 +165,7 @@ function appendChatMessage(message) {
   const item = document.createElement("div");
   item.className = "chat-message";
   item.dataset.animation = config.animation || "rise";
+  item.dataset.accentStyle = config.accentStyle || "rail";
   item.style.setProperty("--user-color", message.color || config.accentColor || "#37e6b2");
   const author = document.createElement("span");
   author.className = "chat-author";
@@ -310,29 +338,53 @@ function showNextAlert() {
   }
   const card = root.querySelector(".alert-card");
   if (!card) return;
+  const eventType = String(payload.eventType || "follow").replace(/^twitch\./, "");
+  const variant = config.eventVariants?.[eventType] || {};
+  const active = { ...config, ...variant };
+  card.dataset.layout = active.layout || "badge";
+  card.dataset.animation = active.animation || "impact";
+  card.dataset.exitAnimation = active.exitAnimation || "fade";
+  card.style.setProperty("--text", active.textColor || config.textColor || "#fff");
+  card.style.setProperty("--accent", active.accentColor || config.accentColor || "#ffb454");
+  card.style.setProperty("--panel-rgb", rgbTuple(active.backgroundColor || config.backgroundColor));
+  card.style.setProperty("--radius", `${Number(active.radius ?? config.radius ?? 18)}px`);
   const user = payload.user || payload.username || "ForgeViewer";
-  const headlineTemplate = payload.headline || config.headline || "{user} just followed!";
+  const headlineTemplate = payload.headline || active.headline || "{user} just followed!";
   root.querySelector(".alert-title").textContent = headlineTemplate
     .replaceAll("{user}", user)
     .replaceAll("{amount}", String(payload.amount ?? ""))
     .replaceAll("{event}", eventLabel(payload.eventType));
-  root.querySelector(".alert-message").textContent = String(payload.message || config.message || "")
+  root.querySelector(".alert-message").textContent = String(payload.message || active.message || "")
     .replaceAll("{user}", user)
     .replaceAll("{amount}", String(payload.amount ?? ""));
-  root.querySelector(".alert-kicker").textContent = eventLabel(payload.eventType);
-  root.querySelector(".alert-symbol").textContent = eventSymbol(payload.eventType);
+  root.querySelector(".alert-kicker").textContent = eventLabel(eventType);
+  root.querySelector(".alert-symbol").textContent = eventSymbol(eventType);
   const media = root.querySelector(".alert-media");
-  media.hidden = !payload.image;
-  if (payload.image) media.querySelector("img").src = payload.image;
+  const imageUrl = payload.image || active.imageUrl;
+  media.hidden = !imageUrl;
+  if (imageUrl) media.querySelector("img").src = imageUrl;
+  playAlertSound(active.soundUrl, active.soundVolume);
   card.classList.remove("is-visible", "is-leaving");
   void card.offsetWidth;
   card.classList.add("is-visible");
-  const duration = Math.max(2, Math.min(30, Number(config.duration) || 7)) * 1000;
+  const duration = Math.max(2, Math.min(30, Number(active.duration) || 7)) * 1000;
   alertTimer = window.setTimeout(() => {
     card.classList.add("is-leaving");
     card.classList.remove("is-visible");
     window.setTimeout(showNextAlert, 520);
   }, duration);
+}
+
+function playAlertSound(url, volume = 75) {
+  alertAudio?.pause();
+  alertAudio = null;
+  if (!url) return;
+  const audio = new Audio(url);
+  audio.volume = clamp(Number(volume) / 100, 0, 1);
+  alertAudio = audio;
+  audio.play().catch(() => {
+    // OBS browser sources normally allow media autoplay; a regular browser may not.
+  });
 }
 
 function eventLabel(type = "follow") {
@@ -417,6 +469,9 @@ function renderReactiveScene() {
     person.dataset.participantId = participant.id;
     person.dataset.discordUserId = participant.discordUserId || "";
     person.dataset.talkingAnimation = participant.talkingAnimation || config.talkingAnimation || "bounce";
+    person.dataset.avatarShape = participant.avatarShape || config.avatarShape || "circle";
+    person.dataset.imageFit = participant.imageFit || config.imageFit || "contain";
+    person.dataset.nameStyle = participant.nameStyle || config.nameStyle || "discord";
     person.classList.toggle("is-speaking", speaking);
     person.classList.toggle("is-muted", muted);
     person.classList.toggle("is-deafened", deafened);
@@ -524,6 +579,7 @@ function renderTimer() {
   const card = root.querySelector(".timer-card");
   card.dataset.layout = config.layout || "industrial";
   card.dataset.align = config.align || "center";
+  card.dataset.accentStyle = config.accentStyle || "rail";
   root.querySelector(".timer-label").hidden = config.showLabel === false;
   root.querySelector(".timer-meta").hidden = config.showMeta === false;
   root.querySelector(".timer-progress").hidden = !config.showProgress;
@@ -591,6 +647,7 @@ function renderSpotify() {
             <span class="song-kicker">NOW PLAYING</span>
             <strong class="song-title"></strong>
             <span class="song-artist"></span>
+            <span class="song-album"></span>
             <div class="song-progress"><i></i></div>
           </div>
         </article>
@@ -601,6 +658,7 @@ function renderSpotify() {
   overlay.dataset.position = config.position || "bottom-left";
   card.dataset.layout = config.layout || "card";
   card.dataset.animation = config.animation || "slide";
+  card.dataset.artShape = config.artShape || "rounded";
   const track = spotifyTrack || {
     name: isPreview ? "Midnight Circuit" : "Nothing playing",
     artist: isPreview ? "Signal Array" : "Spotify",
@@ -609,6 +667,9 @@ function renderSpotify() {
   };
   root.querySelector(".song-title").textContent = track.name || "Unknown track";
   root.querySelector(".song-artist").textContent = track.artist || track.artists?.join(", ") || "Unknown artist";
+  const album = root.querySelector(".song-album");
+  album.textContent = track.album || "";
+  album.hidden = config.showAlbumName === false || !track.album;
   const cover = root.querySelector(".song-cover");
   cover.hidden = !config.showAlbumArt;
   cover.querySelector("img")?.remove();
@@ -688,6 +749,71 @@ function updateSpotify(payload) {
   } : null;
   renderSpotify();
   scheduleSpotifyVisibility(trackChanged);
+}
+
+function renderPoll(animate = true) {
+  const choices = (pollState.choices?.length ? pollState.choices : config.choices || []).slice(0, 2);
+  const total = Number(pollState.totalVotes ?? pollState.total ?? choices.reduce(
+    (sum, choice) => sum + Number(choice.votes ?? choice.count ?? 0), 0
+  )) || 0;
+  root.innerHTML = "";
+  const shell = document.createElement("section");
+  shell.className = "poll-overlay";
+  const card = document.createElement("article");
+  card.className = "poll-card";
+  card.dataset.layout = config.layout || "arena";
+  card.dataset.animation = animate ? config.animation || "rise" : "none";
+  const header = document.createElement("header");
+  header.innerHTML = `<span class="poll-kicker"></span><h1 class="poll-question"></h1>`;
+  header.querySelector(".poll-kicker").textContent = pollStatusLabel(pollState.status);
+  header.querySelector(".poll-question").textContent = pollState.question || config.question || "Live poll";
+  const results = document.createElement("div");
+  results.className = "poll-results";
+  choices.forEach((choice, index) => {
+    const votes = Number(choice.votes ?? choice.count ?? 0) || 0;
+    const percentage = choice.percentage != null
+      ? Math.round(Number(choice.percentage) || 0)
+      : total ? Math.round((votes / total) * 100) : 0;
+    const row = document.createElement("div");
+    row.className = "poll-choice";
+    row.dataset.choice = String(index + 1);
+    row.style.setProperty("--poll-percent", `${percentage}%`);
+    const label = document.createElement("strong");
+    label.textContent = choice.label || `Option ${index + 1}`;
+    const token = document.createElement("span");
+    token.className = "poll-token";
+    token.textContent = `Type ${choice.token || index + 1}`;
+    const score = document.createElement("b");
+    score.textContent = `${percentage}%`;
+    const bar = document.createElement("i");
+    row.append(label, token, score, bar);
+    results.append(row);
+  });
+  const footer = document.createElement("footer");
+  const remaining = currentPollRemaining();
+  footer.innerHTML = `<span>${total} vote${total === 1 ? "" : "s"}</span><strong>${remaining == null ? "" : `${remaining}s`}</strong>`;
+  card.append(header, results, footer);
+  shell.append(card);
+  root.append(shell);
+}
+
+function pollStatusLabel(status = "idle") {
+  return { active: "LIVE CHAT POLL", running: "LIVE CHAT POLL", ended: "FINAL RESULT", idle: "POLL READY" }[status] || String(status).toUpperCase();
+}
+
+function currentPollRemaining() {
+  const endsAt = pollState.endsAt || pollState.endAt;
+  if (endsAt && ["active", "running"].includes(pollState.status)) {
+    return Math.max(0, Math.ceil((new Date(endsAt).getTime() - Date.now()) / 1000));
+  }
+  if (pollState.remainingMs != null) return Math.max(0, Math.ceil(Number(pollState.remainingMs) / 1000));
+  if (pollState.remainingSeconds != null) return Math.max(0, Math.ceil(Number(pollState.remainingSeconds) || 0));
+  return null;
+}
+
+function updatePoll(payload) {
+  pollState = { ...pollState, ...(payload.poll || payload.state || payload) };
+  renderPoll();
 }
 
 function clamp(value, min, max) {
@@ -838,7 +964,7 @@ function connectLocalSocket() {
   localSocket = socket;
   socket.addEventListener("open", () => setStatus("LOCAL FEED CONNECTED", "ready"));
   socket.addEventListener("open", () => {
-    const topics = [`${overlayType}:${profileId}`];
+    const topics = [overlayType === "poll" ? `polls:${profileId}` : `${overlayType}:${profileId}`];
     if (overlayType === "spotify") topics.push("spotify");
     socket.send(JSON.stringify({ type: "subscribe", topics }));
   });
@@ -866,6 +992,9 @@ function handleEvent(message) {
     applyConfig({ ...(payload.config || {}), id: payload.id, name: payload.name });
     return;
   }
+  if (overlayType === "chat" && (type === "chat.test" || type === "chat")) {
+    appendChatMessage(payload);
+  }
   if (
     overlayType === "alerts" &&
     (type === "alerts.test" || type === "alert" || type.startsWith("twitch."))
@@ -881,6 +1010,11 @@ function handleEvent(message) {
   )) setSpeaking(payload);
   if (overlayType === "timer" && (type === "timer.state" || type === "timer" || type === "timer.test")) updateTimerState(payload);
   if (overlayType === "spotify" && (type === "spotify.status" || type === "spotify.track" || type === "spotify" || type === "spotify.test")) updateSpotify(payload);
+  if (overlayType === "poll" && (
+    type === "poll.state" || type === "poll.started" || type === "poll.vote" ||
+    type === "poll.ended" || type === "poll.reset" || type === "poll" ||
+    type === "poll.test" || type === "polls"
+  )) updatePoll(payload);
 }
 
 async function loadLiveState() {
@@ -911,6 +1045,19 @@ async function loadLiveState() {
     }
     window.clearInterval(progressInterval);
     progressInterval = window.setInterval(() => updateSpotifyProgress(), 1000);
+  }
+  if (overlayType === "poll") {
+    try {
+      updatePoll(await getJson(`/api/public/polls/${encodeURIComponent(profileId)}`));
+    } catch {
+      renderPoll();
+    }
+    window.setInterval(() => {
+      if (["active", "running"].includes(pollState.status)) {
+        if (pollState.remainingSeconds != null) pollState.remainingSeconds = Math.max(0, Number(pollState.remainingSeconds) - 1);
+        renderPoll(false);
+      }
+    }, 1000);
   }
 }
 

@@ -3,8 +3,10 @@ import fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
 import path from "node:path";
+import { ASSET_UPLOAD_JSON_LIMIT, AssetManager } from "./asset-manager.js";
+import { validateSpotifyRedirectUri } from "./integration-validation.js";
 
-const PROFILE_TYPES = new Set(["chat", "alerts", "reactives", "timer", "spotify"]);
+const PROFILE_TYPES = new Set(["chat", "alerts", "reactives", "timer", "spotify", "poll"]);
 const SETTINGS_SCOPES = new Set(["general", "discord", "spotify", "twitch", "backup"]);
 const DISCORD_SETTING_KEYS = [
   "clientId",
@@ -52,12 +54,12 @@ function text(response, status, body) {
   response.end(body);
 }
 
-async function readJson(request) {
+async function readJson(request, limit = JSON_LIMIT) {
   let size = 0;
   const chunks = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > JSON_LIMIT) {
+    if (size > limit) {
       const error = new Error("Request body is too large.");
       error.statusCode = 413;
       throw error;
@@ -87,7 +89,14 @@ function parseStored(value, fallback = {}) {
 function normalizeProfile(type, body, id = crypto.randomUUID()) {
   if (!PROFILE_TYPES.has(type)) throw new Error("Unknown overlay profile type.");
   const name = String(body.name || `${type} profile`).trim().slice(0, 80);
-  const config = body.config && typeof body.config === "object" ? body.config : body;
+  const sourceConfig = body.config && typeof body.config === "object" ? body.config : body;
+  const customCss = String(sourceConfig.customCss || "");
+  if (customCss.length > 20_000) {
+    const error = new Error("Advanced overlay CSS cannot exceed 20,000 characters.");
+    error.statusCode = 400;
+    throw error;
+  }
+  const config = { ...sourceConfig, customCss };
   return { id, type, kind: type, name, config };
 }
 
@@ -220,11 +229,14 @@ export function createHttpServer({
   backups,
   spotify,
   twitch = null,
+  polls = null,
+  googleDriveSetup = null,
   discord,
   hub,
   getStatus,
 }) {
   const webRoot = path.join(config.repoRoot, "web");
+  const assets = new AssetManager({ dataDir: config.dataDir });
 
   const listener = async (request, response) => {
     const requestUrl = new URL(request.url, config.publicBaseUrl);
@@ -303,6 +315,27 @@ export function createHttpServer({
 
       if (request.method === "GET" && pathname === "/api/public/spotify/now-playing") {
         return json(response, 200, spotify.status());
+      }
+
+      if (request.method === "GET" && pathname.startsWith("/api/public/polls/")) {
+        const id = pathname.slice("/api/public/polls/".length);
+        const state = await polls?.getPublic(id);
+        if (!state) return json(response, 404, { error: "Poll profile not found" });
+        return json(response, 200, state);
+      }
+
+      if ((request.method === "GET" || request.method === "HEAD") && pathname.startsWith("/uploads/")) {
+        const resolved = await assets.resolveUrl(pathname);
+        if (!resolved) return text(response, 404, "Not found");
+        const stat = await fs.promises.stat(resolved.filePath).catch(() => null);
+        if (!stat?.isFile()) return text(response, 404, "Not found");
+        response.writeHead(200, {
+          "content-type": resolved.asset.mimeType,
+          "content-length": stat.size,
+          "cache-control": "public, max-age=31536000, immutable",
+        });
+        if (request.method === "HEAD") return response.end();
+        return fs.createReadStream(resolved.filePath).pipe(response);
       }
 
       if (request.method === "POST" && pathname === "/api/events") {
@@ -402,7 +435,24 @@ export function createHttpServer({
         return json(response, 200, await getStatus());
       }
 
+      if (pathname === "/api/assets" && request.method === "GET") {
+        return json(response, 200, { assets: await assets.list() });
+      }
+
+      if (pathname === "/api/assets" && request.method === "POST") {
+        const asset = await assets.save(await readJson(request, ASSET_UPLOAD_JSON_LIMIT));
+        await db.addAudit(session.sub, "asset.uploaded", asset.id);
+        return json(response, 201, { asset });
+      }
+
       if (pathname === "/api/spotify/connect" && request.method === "GET") {
+        const redirectValidation = validateSpotifyRedirectUri(config.spotify?.redirectUri);
+        if (!redirectValidation.valid) {
+          return json(response, 409, {
+            error: redirectValidation.error,
+            redirectValidation,
+          });
+        }
         const state = auth.createOAuthState("spotify", "/?view=spotify");
         const location = spotify.authorizationUrl(state);
         if (!location) return json(response, 503, { error: "Spotify is not configured." });
@@ -480,10 +530,25 @@ export function createHttpServer({
         return json(response, 200, { services: await services.list() });
       }
 
+      if (pathname === "/api/services/presets" && request.method === "GET") {
+        return json(response, 200, { presets: services.presets() });
+      }
+
       if (pathname === "/api/services" && request.method === "POST") {
         const spec = await services.save(await readJson(request));
         await db.addAudit(session.sub, "service.saved", spec.id);
         return json(response, 201, { service: spec });
+      }
+
+      const serviceLogs = pathname.match(/^\/api\/services\/([^/]+)\/logs$/);
+      if (serviceLogs && request.method === "GET") {
+        const maxBytes = requestUrl.searchParams.get("maxBytes");
+        return json(response, 200, {
+          log: await services.tailLogs(
+            serviceLogs[1],
+            maxBytes == null ? {} : { maxBytes: Number(maxBytes) },
+          ),
+        });
       }
 
       const serviceAction = pathname.match(/^\/api\/services\/([^/]+)\/(start|stop|restart)$/);
@@ -515,17 +580,19 @@ export function createHttpServer({
           if (settingMatch[1] === "spotify") {
             const secretCiphertext = await db.getOauthToken("spotify-config");
             const secrets = secretCiphertext ? vault.decrypt(secretCiphertext) : {};
+            const publicSettings = spotifyPublicSettings({
+              ...config.spotify,
+              ...(await db.getSetting(key, {})),
+            });
             return json(response, 200, {
               settings: {
-                ...spotifyPublicSettings({
-                  ...config.spotify,
-                  ...(await db.getSetting(key, {})),
-                }),
+                ...publicSettings,
                 clientSecretConfigured: Boolean(
                   secrets.clientSecret || config.spotify?.clientSecret,
                 ),
               },
               status: spotify.status(),
+              redirectValidation: validateSpotifyRedirectUri(publicSettings.redirectUri),
             });
           }
           if (settingMatch[1] === "twitch") {
@@ -533,6 +600,17 @@ export function createHttpServer({
             return json(response, 200, {
               settings: twitch.publicSettings(),
               status: twitch.status(),
+            });
+          }
+          if (settingMatch[1] === "general" || settingMatch[1] === "backup") {
+            const settings = parseStored(await db.getSetting(key), {});
+            const configuration = backups.publicConfiguration?.() || {};
+            return json(response, 200, {
+              settings: {
+                ...settings,
+                backupConnected: Boolean(configuration.cloudConfigured),
+              },
+              backup: backups.status(),
             });
           }
           return json(response, 200, {
@@ -608,6 +686,13 @@ export function createHttpServer({
               ...previousSettings,
               ...spotifyPublicSettings(body),
             };
+            const redirectValidation = validateSpotifyRedirectUri(settings.redirectUri);
+            if (!redirectValidation.valid) {
+              const error = new Error(redirectValidation.error);
+              error.statusCode = 400;
+              error.details = redirectValidation;
+              throw error;
+            }
             const secrets = {
               clientSecret: body.clearClientSecret
                 ? ""
@@ -637,6 +722,7 @@ export function createHttpServer({
                 clientSecretConfigured: Boolean(secrets.clientSecret),
               },
               status: spotify.status(),
+              redirectValidation,
             });
           }
           if (settingMatch[1] === "twitch") {
@@ -645,8 +731,14 @@ export function createHttpServer({
             await db.addAudit(session.sub, "settings.saved", "twitch");
             return json(response, 200, result);
           }
-          const settings = body;
+          const settings =
+            settingMatch[1] === "general" || settingMatch[1] === "backup"
+              ? { ...db.getSetting(key, {}), ...body }
+              : body;
           await db.setSetting(key, settings);
+          if (settingMatch[1] === "general" || settingMatch[1] === "backup") {
+            backups.configure?.(settings);
+          }
           await db.addAudit(session.sub, "settings.saved", settingMatch[1]);
           if (settingMatch[1] === "discord") await discord.reloadSettings?.();
           return json(response, 200, { settings });
@@ -744,6 +836,14 @@ export function createHttpServer({
         return json(response, 200, { state });
       }
 
+      const pollControl = pathname.match(/^\/api\/polls\/([^/]+)\/control$/);
+      if (pollControl && request.method === "POST") {
+        const body = await readJson(request);
+        const state = await polls.control(pollControl[1], body.action);
+        await db.addAudit(session.sub, `poll.${body.action}`, pollControl[1]);
+        return json(response, 200, { state });
+      }
+
       if (pathname === "/api/backups" && request.method === "GET") {
         return json(response, 200, backups.status());
       }
@@ -756,6 +856,27 @@ export function createHttpServer({
 
       if (pathname === "/api/backups/test" && request.method === "POST") {
         return json(response, 200, await backups.test());
+      }
+
+      if (pathname === "/api/backups/google/setup/start" && request.method === "POST") {
+        const flow = googleDriveSetup.start(await readJson(request));
+        await db.addAudit(session.sub, "backup.google.setup.started", flow.remoteName);
+        return json(response, 202, { flow });
+      }
+
+      const googleSetup = pathname.match(/^\/api\/backups\/google\/setup\/([^/]+)$/);
+      if (googleSetup && request.method === "GET") {
+        const flow = googleDriveSetup.get(googleSetup[1]);
+        if (!flow) return json(response, 404, { error: "Google Drive setup not found." });
+        return json(response, 200, { flow });
+      }
+
+      const googleSetupCancel = pathname.match(/^\/api\/backups\/google\/setup\/([^/]+)\/cancel$/);
+      if (googleSetupCancel && request.method === "POST") {
+        const flow = googleDriveSetup.cancel(googleSetupCancel[1]);
+        if (!flow) return json(response, 404, { error: "Google Drive setup not found." });
+        await db.addAudit(session.sub, "backup.google.setup.cancelled", flow.remoteName);
+        return json(response, 200, { flow });
       }
 
       if (pathname.startsWith("/api/")) return json(response, 404, { error: "Not found" });

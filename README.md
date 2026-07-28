@@ -9,9 +9,11 @@ dashboard:
 
 - status panels and allowlisted service start/stop/restart controls;
 - automatic member roles and saved, user-owned temporary voice channels;
-- Twitch chat, alerts, PNGTuber/reactive scenes, follow/subathon-style timers,
-  and Spotify now-playing overlays;
+- Twitch chat, per-event alerts, Discord-reactive PNGTuber scenes,
+  follow/subathon-style timers, Spotify now-playing, and live chat-poll
+  overlays;
 - profile-based OBS browser-source URLs;
+- advanced per-profile custom CSS and local PNG/WebP/GIF/audio uploads;
 - local persistence plus optional Google Drive/WebDAV backups through rclone
   (use an rclone `crypt` remote for encryption).
 
@@ -95,10 +97,14 @@ http://PHONE_LAN_IP:8787/overlay.html?type=alerts&profile=PROFILE_ID
 http://PHONE_LAN_IP:8787/overlay.html?type=reactives&profile=PROFILE_ID
 http://PHONE_LAN_IP:8787/overlay.html?type=timer&profile=PROFILE_ID
 http://PHONE_LAN_IP:8787/overlay.html?type=spotify&profile=PROFILE_ID
+http://PHONE_LAN_IP:8787/overlay.html?type=poll&profile=PROFILE_ID
 ```
 
 Overlay profiles are intentionally readable on the trusted LAN so OBS does not
 need a secret in its URL. Do not port-forward the dashboard from your router.
+The visual controls are the primary editor. Every overlay also has an
+**Advanced → Custom overlay CSS** field for targeted overrides; the CSS is
+isolated to that one browser source and bounded to 20,000 characters.
 
 ## Backups
 
@@ -109,7 +115,9 @@ cd ~/streamforge-local
 bash scripts/backup.sh --local-only
 ```
 
-When `RCLONE_REMOTE` is configured, the same command without `--local-only`
+The dashboard can create the first Google Drive remote through
+**Backup & Settings → Connect Google Drive**. When `RCLONE_REMOTE` or a saved
+dashboard remote is configured, the same command without `--local-only`
 uploads the archive and SHA-256 checksum. Prefer an rclone `crypt` remote
 because the archive contains credentials:
 

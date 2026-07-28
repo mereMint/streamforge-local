@@ -157,6 +157,7 @@ Supported `TYPE` values are:
 - `reactives`
 - `timer`
 - `spotify`
+- `poll`
 
 If you entered the dashboard through the `127.0.0.1` SSH tunnel, first open
 **Backup & Settings → Public LAN origin** and set
@@ -183,6 +184,12 @@ position their sprites on the scene canvas, and reuse that one profile URL in
 OBS. Use optimized PNG/WebP assets and avoid very large animated images on the
 phone.
 
+The dashboard accepts PNG, WebP, GIF, MP3, Ogg, and WAV assets for the overlay
+controls that expose uploads. Saved uploads receive randomized public LAN URLs.
+Each editor also includes a collapsed **Advanced → Custom overlay CSS** field.
+Use the visual editor first; custom CSS is profile-specific, injected as plain
+CSS (never HTML or JavaScript), and limited to 20,000 characters.
+
 ## Twitch chat and alerts
 
 Create chat and alert profiles in the dashboard, then use the `chat` and
@@ -199,9 +206,17 @@ Open **Twitch Commands** to configure a dedicated bot account, channel, command
 prefix, Spotify playlist, and commands. The OAuth chat token is encrypted
 locally. Give it only Twitch chat read/write access. Commands are declarative:
 they can return a custom template, show the current Spotify track, share the
-playlist, or request a track through Spotify's queue. They cannot execute shell
-commands or arbitrary code. Permissions and global cooldowns are enforced
-before a reply is sent.
+playlist or current album, report StreamForge uptime, or request a track
+through Spotify's queue. Quoted and unquoted freeform requests such as
+`!sr "Michael Jackson - Billie Jean"` are preserved as one search query. They
+cannot execute shell commands or arbitrary code. Permissions and global
+cooldowns are enforced before a reply is sent.
+
+The **Chat Poll** editor listens to the same public Twitch chat stream and
+counts exact configured vote tokens such as `1` and `2`. A viewer has one
+in-memory vote, may change it when enabled, and voter identities are never
+persisted. Starting a poll publishes its live state to the OBS overlay and the
+bounded timer ends it automatically.
 
 Follow, subscription, resubscription, gift-sub, bits, raid, channel-points,
 hype-train, goal, poll, prediction, shoutout, charity, tip, merch, and other
@@ -246,6 +261,21 @@ channel-points, and the broader Twitch event catalog still come from the
 companion EventSub bridge.
 
 ## Google Drive backups with rclone
+
+The simplest setup is **Backup & Settings → Connect Google Drive**. StreamForge
+starts rclone's non-interactive Google authorization flow, exposes only its
+validated `127.0.0.1` authorization link, verifies the remote, and stores only
+the remote name, folder, and selected scope. OAuth tokens remain in rclone's
+Termux configuration. Open the generated link on the phone running
+StreamForge; a PC cannot follow a callback bound to the phone's loopback
+address.
+
+The default `drive.file` scope lets rclone access only files it creates. The
+optional full-Drive scope is broader and requires explicit confirmation. A
+direct Drive remote does not encrypt the resulting `.tar.gz` archive at rest,
+and that archive contains `.env` plus integration credentials. For real cloud
+backups, wrap the connected Drive remote in `crypt` as described below and keep
+the recovery password/config somewhere separate from the phone.
 
 Run:
 
