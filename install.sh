@@ -271,7 +271,7 @@ install_termux_services() {
   sv-enable "$SERVICE_NAME" >/dev/null
 
   local attempt
-  for attempt in {1..50}; do
+  for ((attempt = 0; attempt < 50; attempt++)); do
     if sv status "$SERVICE_NAME" >/dev/null 2>&1 &&
        sv status sshd >/dev/null 2>&1; then
       break
