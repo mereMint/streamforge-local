@@ -18,6 +18,8 @@ polling. Features that have no credentials remain dormant.
   dashboard or Discord input is ever passed to a shell.
 - `src/spotify.js` stores encrypted OAuth tokens and publishes now-playing
   state.
+- `src/twitch.js` owns the encrypted Twitch chat-bot token and runs safe,
+  declarative viewer commands with permissions and cooldowns.
 - `web/` contains plain static HTML, CSS, and JavaScript. No frontend framework
   runs on the phone.
 

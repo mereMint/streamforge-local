@@ -315,3 +315,68 @@ test("bot stays dormant without credentials and service commands use saved IDs",
   assert.equal(db.listAudit({ action: "service.start" }).length, 1);
   await bot.stop();
 });
+
+test("reactive Discord discovery returns avatars, mute state, and the owner's channel", async (t) => {
+  const dataDir = await temporaryDirectory();
+  const db = await createDatabase({ dataDir });
+  t.after(async () => {
+    await db.close();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+  const member = {
+    id: "owner",
+    displayName: "Mint",
+    user: { id: "owner", username: "mint", bot: false },
+    voice: {
+      channelId: "voice-one",
+      selfMute: true,
+      serverMute: false,
+      selfDeaf: false,
+      serverDeaf: false,
+      suppress: false,
+    },
+    displayAvatarURL: () => "https://cdn.discordapp.com/avatars/owner/avatar.png",
+  };
+  const channel = {
+    id: "voice-one",
+    name: "Live studio",
+    members: new Map([["owner", member]]),
+    isVoiceBased: () => true,
+  };
+  const guild = {
+    id: "guild",
+    name: "Forge",
+    channels: {
+      cache: new Map([["voice-one", channel]]),
+      fetch: async () => new Map([["voice-one", channel]]),
+    },
+  };
+  const client = {
+    user: { id: "bot", username: "forge-bot" },
+    ws: { ping: 12 },
+    guilds: {
+      cache: new Map([["guild", guild]]),
+      fetch: async () => guild,
+    },
+    isReady: () => true,
+    once() {},
+    on() {},
+    destroy() {},
+  };
+  const bot = createDiscordBot({
+    config: {
+      discordGuildId: "guild",
+      discordOwnerUserIds: ["owner"],
+      discordToken: "test-token",
+    },
+    db,
+    client,
+    logger: { info() {}, warn() {}, error() {} },
+  });
+  const channels = await bot.listVoiceChannels();
+  assert.equal(channels[0].name, "Live studio");
+  assert.equal(channels[0].members[0].selfMuted, true);
+  assert.match(channels[0].members[0].avatarUrl, /cdn\.discordapp\.com/);
+  const context = await bot.reactiveContext();
+  assert.equal(context.selectedChannelId, "voice-one");
+});

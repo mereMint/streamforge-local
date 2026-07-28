@@ -11,6 +11,7 @@ import { createHttpServer } from "./http-server.js";
 import { RealtimeHub } from "./realtime.js";
 import { ServiceManager } from "./service-manager.js";
 import { SpotifyManager } from "./spotify.js";
+import { TwitchManager } from "./twitch.js";
 
 function localAddresses(port, protocol = "http:") {
   const addresses = [];
@@ -59,11 +60,18 @@ async function bootstrap() {
     Object.assign(config.discord, savedDiscord);
   }
   Object.assign(config.discord, savedDiscordSecrets);
+  const savedSpotify = db.getSetting("settings:spotify", {});
+  const savedSpotifyCiphertext = db.getOauthToken("spotify-config");
+  const savedSpotifySecrets = savedSpotifyCiphertext
+    ? vault.decrypt(savedSpotifyCiphertext)
+    : {};
+  Object.assign(config.spotify, savedSpotify, savedSpotifySecrets);
   const auth = new AuthManager(config);
   const backups = new BackupManager(config);
 
   let discord;
   let spotify;
+  let twitch;
   let services;
 
   const getStatus = async () => {
@@ -91,6 +99,7 @@ async function bootstrap() {
       services: services ? await services.list() : [],
       discord: discord?.status?.() || { configured: false, connected: false },
       spotify: spotify?.status?.() || { configured: false, connected: false },
+      twitch: twitch?.status?.() || { configured: false, connected: false },
       backup: backups.status(),
       config: describeConfig(config),
     };
@@ -102,15 +111,20 @@ async function bootstrap() {
     onChange: () => hub.broadcast("status", "status-changed", { source: "services" }),
   });
   spotify = new SpotifyManager({ config, db, vault, hub });
+  twitch = new TwitchManager({ config, db, vault, spotify, hub });
   discord = createDiscordBot({
     config,
     db,
     serviceManager: services,
     broadcast: (topic, type, payload) => {
       hub.broadcast(topic, type, payload);
-      if (type === "discord.speaking") {
+      if (type === "discord.speaking" || type === "discord.voice.snapshot") {
         for (const profile of db.listOverlays("reactives")) {
-          hub.broadcast(`reactives:${profile.id}`, "reactives", payload);
+          const targetChannelId =
+            profile.config?.voiceChannelId || config.discord.reactiveVoiceChannelId;
+          if (!targetChannelId || String(targetChannelId) === String(payload.channelId)) {
+            hub.broadcast(`reactives:${profile.id}`, type, payload);
+          }
         }
       }
     },
@@ -125,6 +139,7 @@ async function bootstrap() {
     services,
     backups,
     spotify,
+    twitch,
     discord,
     hub,
     getStatus,
@@ -133,6 +148,7 @@ async function bootstrap() {
   await listen(server, config.host, config.port);
   await services.startAutostart();
   spotify.start();
+  await twitch.start();
   await discord.start();
 
   console.log("StreamForge Local is running.");
@@ -148,6 +164,7 @@ async function bootstrap() {
     console.log(`Stopping after ${signal}...`);
     spotify.stop();
     await Promise.allSettled([
+      twitch.stop(),
       discord.stop(),
       services.stopAll(),
       new Promise((resolve) => server.close(resolve)),
@@ -167,7 +184,7 @@ async function bootstrap() {
     });
   }
 
-  return { config, db, server, discord, services, spotify, shutdown };
+  return { config, db, server, discord, services, spotify, twitch, shutdown };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

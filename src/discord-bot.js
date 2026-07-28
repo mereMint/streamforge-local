@@ -467,6 +467,83 @@ export function createDiscordBot({
     };
   }
 
+  function reactiveMember(member, voiceState = member?.voice) {
+    const user = member?.user;
+    if (!member || user?.bot) return null;
+    return {
+      userId: String(member.id || user?.id || ""),
+      displayName:
+        member.displayName || user?.globalName || user?.displayName || user?.username || "Speaker",
+      username: user?.username || null,
+      avatarUrl:
+        member.displayAvatarURL?.({ extension: "png", size: 256 }) ||
+        user?.displayAvatarURL?.({ extension: "png", size: 256 }) ||
+        user?.avatarURL?.({ extension: "png", size: 256 }) ||
+        null,
+      channelId: voiceState?.channelId || member.voice?.channelId || null,
+      selfMuted: Boolean(voiceState?.selfMute),
+      serverMuted: Boolean(voiceState?.serverMute),
+      selfDeafened: Boolean(voiceState?.selfDeaf),
+      serverDeafened: Boolean(voiceState?.serverDeaf),
+      suppressed: Boolean(voiceState?.suppress),
+    };
+  }
+
+  function channelSnapshot(channel) {
+    return {
+      channelId: channel?.id || null,
+      channelName: channel?.name || null,
+      members: [...(channel?.members?.values?.() || [])]
+        .map((member) => reactiveMember(member))
+        .filter(Boolean),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  function publishReactiveSnapshot(channel) {
+    if (!channel) return null;
+    const snapshot = channelSnapshot(channel);
+    sendBroadcast(broadcast, "discord.voice.snapshot", snapshot);
+    return snapshot;
+  }
+
+  async function listVoiceChannels() {
+    if (!client?.isReady?.()) return [];
+    const guild =
+      client.guilds.cache.get(settings.guildId) ??
+      (await client.guilds.fetch(settings.guildId).catch(() => null));
+    if (!guild) return [];
+    const channels = guild.channels.cache?.values
+      ? [...guild.channels.cache.values()]
+      : [...(await guild.channels.fetch()).values()];
+    return channels
+      .filter((channel) => channel?.isVoiceBased?.())
+      .map((channel) => ({
+        id: channel.id,
+        name: channel.name,
+        memberCount: channel.members?.size || 0,
+        members: [...(channel.members?.values?.() || [])]
+          .map((member) => reactiveMember(member))
+          .filter(Boolean),
+      }))
+      .sort((left, right) => right.memberCount - left.memberCount || left.name.localeCompare(right.name));
+  }
+
+  async function reactiveContext({ preferredUserIds = [] } = {}) {
+    const channels = await listVoiceChannels();
+    const preferred = new Set(
+      [...preferredUserIds, ...settings.ownerUserIds].map(String).filter(Boolean),
+    );
+    const selected =
+      channels.find((channel) =>
+        channel.members.some((member) => preferred.has(member.userId)),
+      ) ||
+      channels.find((channel) => channel.id === reactiveChannelId) ||
+      channels.find((channel) => channel.memberCount > 0) ||
+      null;
+    return { selectedChannelId: selected?.id || null, channels };
+  }
+
   async function currentApplicationStatus() {
     if (typeof getApplicationStatus === "function") {
       return (await getApplicationStatus()) ?? {};
@@ -808,6 +885,17 @@ export function createDiscordBot({
     if (newState.channelId && db.getTempChannel(newState.channelId)) {
       await db.touchTempChannel(newState.channelId);
     }
+    if (
+      reactiveChannelId &&
+      (oldState.channelId === reactiveChannelId || newState.channelId === reactiveChannelId)
+    ) {
+      const guild = newState.guild || oldState.guild;
+      let channel = guild?.channels?.cache?.get?.(reactiveChannelId) || null;
+      if (!channel && typeof guild?.channels?.fetch === "function") {
+        channel = await guild.channels.fetch(reactiveChannelId).catch(() => null);
+      }
+      if (channel) publishReactiveSnapshot(channel);
+    }
   }
 
   async function handleChannelDelete(channel) {
@@ -898,19 +986,31 @@ export function createDiscordBot({
     reactiveChannelId = channelId;
 
     const onStart = (userId) => {
-      const event = { userId, speaking: true, channelId };
+      const member = channel.members?.get?.(String(userId));
+      const event = {
+        ...reactiveMember(member),
+        userId: String(userId),
+        speaking: true,
+        channelId,
+      };
       request.onSpeaking?.(event);
       sendBroadcast(broadcast, "discord.speaking", event);
     };
     const onEnd = (userId) => {
-      const event = { userId, speaking: false, channelId };
+      const member = channel.members?.get?.(String(userId));
+      const event = {
+        ...reactiveMember(member),
+        userId: String(userId),
+        speaking: false,
+        channelId,
+      };
       request.onSpeaking?.(event);
       sendBroadcast(broadcast, "discord.speaking", event);
     };
     voiceConnection.receiver.speaking.on("start", onStart);
     voiceConnection.receiver.speaking.on("end", onEnd);
     reactiveCallbacks = { onStart, onEnd };
-    return { channelId };
+    return { channelId, snapshot: publishReactiveSnapshot(channel) };
   }
 
   function disableReactiveSpeaking() {
@@ -1087,6 +1187,9 @@ export function createDiscordBot({
     enableReactiveSpeaking,
     disableReactiveSpeaking,
     updateTempChannelPreferences,
+    listVoiceChannels,
+    reactiveContext,
+    publishReactiveSnapshot,
     handleInteraction,
     handleVoiceState,
   };

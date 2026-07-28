@@ -63,6 +63,8 @@ test("HTTP API authenticates, persists profiles, timers, and encrypted Discord s
   const spotify = {
     status: () => ({ configured: false, connected: false }),
     authorizationUrl: () => null,
+    updateCredentials: () => ({ configured: true, connected: false }),
+    disconnect: async () => ({ configured: true, connected: false }),
   };
   const server = createHttpServer({
     config,
@@ -128,6 +130,25 @@ test("HTTP API authenticates, persists profiles, timers, and encrypted Discord s
   assert.equal(publicTimer.running, true);
   assert.ok(publicTimer.remainingMs <= 120_000 && publicTimer.remainingMs > 115_000);
 
+  const eventResponse = await fetch(`${base}/api/events`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${config.eventWebhookToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      type: "follow",
+      user: "event-viewer",
+      timerProfileId: created.profile.id,
+    }),
+  });
+  assert.equal(eventResponse.status, 202);
+  const timerAfterEvent = await fetch(
+    `${base}/api/public/timer/${created.profile.id}`,
+  ).then((response) => response.json());
+  assert.equal(timerAfterEvent.eventCount, 1);
+  assert.ok(timerAfterEvent.remainingMs > publicTimer.remainingMs + 25_000);
+
   const discordSave = await fetch(`${base}/api/settings/discord`, {
     method: "PUT",
     headers: { "content-type": "application/json", cookie },
@@ -154,6 +175,22 @@ test("HTTP API authenticates, persists profiles, timers, and encrypted Discord s
   assert.equal(discordSettings.status.configured, true);
   assert.equal(JSON.stringify(discordSettings).includes("very-secret-discord-token"), false);
   assert.equal(JSON.stringify(discordSettings).includes("very-secret-oauth-value"), false);
+
+  const spotifySave = await fetch(`${base}/api/settings/spotify`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", cookie },
+    body: JSON.stringify({
+      clientId: "spotify-client",
+      clientSecret: "spotify-secret",
+      redirectUri: "http://127.0.0.1/auth/spotify/callback",
+    }),
+  }).then((response) => response.json());
+  assert.equal(spotifySave.settings.clientSecretConfigured, true);
+  assert.equal("clientSecret" in spotifySave.settings, false);
+  const encryptedSpotifyConfig = db.getOauthToken("spotify-config");
+  assert.ok(encryptedSpotifyConfig);
+  assert.equal(encryptedSpotifyConfig.includes("spotify-secret"), false);
+  assert.equal(vault.decrypt(encryptedSpotifyConfig).clientSecret, "spotify-secret");
 
   const encrypted = db.getOauthToken("discord-config");
   assert.ok(encrypted);

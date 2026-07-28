@@ -1785,6 +1785,134 @@ dialog::backdrop {
   from { opacity: 0; transform: translateY(8px); }
 }
 
+.toggle-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .7rem 1rem;
+  margin-top: .85rem;
+}
+
+.button--full {
+  width: 100%;
+  margin-top: .7rem;
+}
+
+.button.is-disabled,
+.button[aria-disabled="true"] {
+  cursor: not-allowed;
+  filter: grayscale(.7);
+  opacity: .55;
+}
+
+.integration-setup {
+  display: grid;
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding: 1.15rem;
+}
+
+.integration-setup__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.integration-setup__footer .form-message {
+  margin: 0;
+}
+
+.preview-toolbar--secondary {
+  margin-top: 1rem;
+}
+
+.reactive-live-preview {
+  min-height: 330px;
+}
+
+.command-list {
+  display: grid;
+  gap: .9rem;
+}
+
+.command-card {
+  display: grid;
+  gap: .85rem;
+  padding: 1rem;
+  background: color-mix(in srgb, var(--panel-2), transparent 16%);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+}
+
+.command-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.command-card__header .toggle {
+  margin: 0;
+}
+
+.command-card__header strong {
+  color: var(--mint);
+  font-family: var(--mono);
+  font-size: .83rem;
+}
+
+.command-cooldown {
+  max-width: 13rem;
+}
+
+.command-preview {
+  min-height: 118px;
+  margin-top: .8rem;
+  padding: 1.1rem;
+  color: #eef7f8;
+  background:
+    radial-gradient(circle at 80% 10%, rgba(55, 230, 178, .12), transparent 38%),
+    #0b1219;
+  border: 1px solid #253746;
+  border-radius: 14px;
+}
+
+.command-preview__user {
+  color: var(--mint);
+  font-size: .7rem;
+  font-weight: 850;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.command-preview p {
+  margin: .55rem 0 0;
+  font-size: 1.05rem;
+  line-height: 1.45;
+}
+
+.feature-list {
+  display: grid;
+  gap: .75rem;
+  margin: .4rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.feature-list li {
+  position: relative;
+  padding-left: 1.3rem;
+  color: var(--muted);
+  font-size: .78rem;
+}
+
+.feature-list li::before {
+  position: absolute;
+  left: 0;
+  color: var(--mint);
+  content: "✓";
+}
+
 @media (max-width: 1100px) {
   .metric-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1942,8 +2070,14 @@ dialog::backdrop {
   }
 
   .field-row,
-  .color-grid {
+  .color-grid,
+  .toggle-grid {
     grid-template-columns: 1fr;
+  }
+
+  .integration-setup__footer {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .field-row--three {

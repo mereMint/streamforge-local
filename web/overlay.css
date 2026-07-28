@@ -8,6 +8,13 @@
   --radius: 18px;
   --font-size: 28px;
   --font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-weight: 650;
+  --line-height: 1.35;
+  --message-spacing: 10px;
+  --message-radius: 14px;
+  --emote-scale: 1;
+  --digit-size: 94px;
+  --panel-opacity: .92;
 }
 
 * {
@@ -60,7 +67,7 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
-  gap: .34em;
+  gap: var(--message-spacing);
   width: 100%;
   height: 100%;
   padding: .7em;
@@ -74,11 +81,11 @@ body {
   padding: .48em .58em;
   overflow-wrap: anywhere;
   color: var(--text);
-  line-height: 1.28;
+  line-height: var(--line-height);
   text-shadow: 0 2px 5px rgba(0, 0, 0, .75);
   background: rgba(var(--panel-rgb), var(--opacity));
   border-left: .12em solid var(--user-color, var(--accent));
-  border-radius: 0 .38em .38em 0;
+  border-radius: var(--message-radius);
   box-shadow: 0 .25em .8em rgba(0, 0, 0, .16);
   animation: chat-rise .26s ease both;
 }
@@ -116,7 +123,40 @@ body {
 }
 
 .chat-text {
-  font-weight: 620;
+  font-weight: var(--font-weight);
+}
+
+.chat-time {
+  color: color-mix(in srgb, var(--text), transparent 52%);
+  font-size: .54em;
+  font-weight: 650;
+}
+
+.chat-emote {
+  display: inline-block;
+  width: auto;
+  height: calc(1.35em * var(--emote-scale));
+  margin: -.18em .04em;
+  vertical-align: middle;
+  object-fit: contain;
+}
+
+.chat-overlay[data-layout="minimal"] .chat-message {
+  padding: .22em 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.chat-overlay[data-layout="bubbles"] .chat-message {
+  border: 1px solid color-mix(in srgb, var(--user-color), transparent 68%);
+  border-left-width: 1px;
+  border-radius: 999px;
+}
+
+.chat-overlay[data-layout="full-width"] .chat-message {
+  width: 100%;
 }
 
 @keyframes chat-rise {
@@ -141,6 +181,11 @@ body {
   padding: 4%;
 }
 
+.alert-overlay[data-position^="top"] { align-items: start; }
+.alert-overlay[data-position^="bottom"] { align-items: end; }
+.alert-overlay[data-position$="left"] { justify-items: start; }
+.alert-overlay[data-position$="right"] { justify-items: end; }
+
 .alert-card {
   position: relative;
   display: grid;
@@ -161,6 +206,37 @@ body {
 .alert-card.is-visible {
   opacity: 1;
   animation: alert-impact .56s cubic-bezier(.2, 1.2, .3, 1) both;
+}
+
+.alert-card.is-leaving {
+  pointer-events: none;
+  animation: alert-exit-fade .46s cubic-bezier(.4, 0, 1, 1) both;
+}
+
+.alert-card[data-exit-animation="drop"].is-leaving {
+  animation-name: alert-exit-drop;
+}
+
+.alert-card[data-exit-animation="shrink"].is-leaving {
+  animation-name: alert-exit-shrink;
+}
+
+.alert-card[data-exit-animation="none"].is-leaving {
+  opacity: 0;
+  animation: none;
+}
+
+.alert-media {
+  width: clamp(70px, 11vw, 150px);
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: calc(var(--radius) * .75);
+}
+
+.alert-media img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .alert-card[data-layout="minimal"] {
@@ -253,6 +329,18 @@ body {
   to { opacity: 1; transform: none; }
 }
 
+@keyframes alert-exit-fade {
+  to { opacity: 0; transform: translateY(-18px); filter: blur(4px); }
+}
+
+@keyframes alert-exit-drop {
+  to { opacity: 0; transform: translateY(80px) rotate(2deg); }
+}
+
+@keyframes alert-exit-shrink {
+  to { opacity: 0; transform: scale(.72); filter: blur(7px); }
+}
+
 /* Reactive scene */
 
 .reactive-overlay {
@@ -290,6 +378,31 @@ body {
   transform: translateY(-1.5%) scale(1.025);
 }
 
+.reactive-person[data-talking-animation="bounce"].is-speaking img {
+  animation: reactive-bounce .52s cubic-bezier(.2, .8, .25, 1) infinite alternate;
+}
+
+.reactive-person[data-talking-animation="pulse"].is-speaking img {
+  animation: reactive-pulse .68s ease-in-out infinite alternate;
+}
+
+.reactive-person[data-talking-animation="shake"].is-speaking img {
+  animation: reactive-shake .34s ease-in-out infinite alternate;
+}
+
+.reactive-person[data-talking-animation="lift"].is-speaking img {
+  animation: reactive-lift .58s ease-in-out infinite alternate;
+}
+
+.reactive-person.is-muted,
+.reactive-person.is-deafened {
+  filter: grayscale(.7) brightness(.58);
+}
+
+.reactive-person.is-hidden-state {
+  opacity: 0;
+}
+
 .reactive-placeholder {
   position: absolute;
   inset: 10%;
@@ -323,6 +436,26 @@ body {
   border-color: transparent;
 }
 
+@keyframes reactive-bounce {
+  from { transform: translateY(0) scale(1.01); }
+  to { transform: translateY(-3.5%) scale(1.045); }
+}
+
+@keyframes reactive-pulse {
+  from { transform: scale(1.01); }
+  to { transform: scale(1.055); }
+}
+
+@keyframes reactive-shake {
+  from { transform: translateX(-.8%) rotate(-.35deg); }
+  to { transform: translateX(.8%) rotate(.35deg); }
+}
+
+@keyframes reactive-lift {
+  from { transform: translateY(0); }
+  to { transform: translateY(-5%); }
+}
+
 /* Timer */
 
 .timer-overlay {
@@ -338,11 +471,16 @@ body {
   min-width: min(760px, 92vw);
   padding: clamp(18px, 3vw, 34px) clamp(24px, 5vw, 58px);
   text-align: center;
-  background: rgba(var(--panel-rgb), .94);
+  background: rgba(var(--panel-rgb), var(--panel-opacity));
   border: 1px solid color-mix(in srgb, var(--accent), transparent 60%);
   border-radius: var(--radius);
   box-shadow: 0 24px 80px rgba(0, 0, 0, .35);
 }
+
+.timer-card[data-align="left"] { text-align: left; }
+.timer-card[data-align="right"] { text-align: right; }
+.timer-card[data-align="left"] .timer-meta { justify-content: flex-start; }
+.timer-card[data-align="right"] .timer-meta { justify-content: flex-end; }
 
 .timer-card::before {
   position: absolute;
@@ -368,11 +506,38 @@ body {
 .timer-digits {
   color: var(--text);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-  font-size: clamp(50px, 10vw, 128px);
+  font-size: clamp(42px, var(--digit-size), 180px);
   font-weight: 800;
   line-height: 1;
   letter-spacing: -.07em;
   text-shadow: 0 0 25px color-mix(in srgb, var(--accent), transparent 82%);
+}
+
+.timer-progress {
+  height: 5px;
+  margin-top: 14px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, .12);
+  border-radius: 99px;
+}
+
+.timer-progress i {
+  display: block;
+  width: var(--timer-progress, 0%);
+  height: 100%;
+  background: var(--accent);
+  box-shadow: 0 0 16px var(--accent);
+  transition: width .5s linear;
+}
+
+.timer-card.is-event {
+  animation: timer-event .72s cubic-bezier(.2, .85, .25, 1);
+}
+
+@keyframes timer-event {
+  0% { transform: scale(.97); }
+  35% { transform: scale(1.035); box-shadow: 0 24px 80px rgba(0, 0, 0, .35), 0 0 40px color-mix(in srgb, var(--accent), transparent 55%); }
+  100% { transform: none; }
 }
 
 .timer-meta {
@@ -431,8 +596,28 @@ body {
   border: 1px solid color-mix(in srgb, var(--accent), transparent 72%);
   border-radius: var(--radius);
   box-shadow: 0 22px 60px rgba(0, 0, 0, .35);
+  opacity: 0;
+  transform: translateY(18px) scale(.97);
   transform-origin: bottom left;
-  animation: song-in .4s cubic-bezier(.2, .9, .25, 1) both;
+  transition: opacity .34s ease, transform .34s cubic-bezier(.2, .9, .25, 1);
+}
+
+.song-card.is-visible {
+  opacity: 1;
+  transform: none;
+  animation: song-in .5s cubic-bezier(.15, .9, .2, 1) both;
+}
+
+.song-card[data-animation="pop"].is-visible {
+  animation-name: song-pop;
+}
+
+.song-card[data-animation="fade"].is-visible {
+  animation-name: song-fade;
+}
+
+.song-card[data-animation="none"].is-visible {
+  animation: none;
 }
 
 .song-cover {
@@ -551,6 +736,15 @@ body {
 
 @keyframes song-in {
   from { opacity: 0; transform: translateY(20px) scale(.96); }
+}
+
+@keyframes song-pop {
+  from { opacity: 0; transform: scale(.8) rotate(-1deg); }
+  70% { transform: scale(1.025); }
+}
+
+@keyframes song-fade {
+  from { opacity: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

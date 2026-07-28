@@ -5,7 +5,7 @@ import https from "node:https";
 import path from "node:path";
 
 const PROFILE_TYPES = new Set(["chat", "alerts", "reactives", "timer", "spotify"]);
-const SETTINGS_SCOPES = new Set(["general", "discord", "backup"]);
+const SETTINGS_SCOPES = new Set(["general", "discord", "spotify", "twitch", "backup"]);
 const DISCORD_SETTING_KEYS = [
   "clientId",
   "redirectUri",
@@ -115,6 +115,13 @@ function discordPublicSettings(input = {}) {
   );
 }
 
+function spotifyPublicSettings(input = {}) {
+  return {
+    clientId: String(input.clientId || "").trim().slice(0, 200),
+    redirectUri: String(input.redirectUri || "").trim().slice(0, 500),
+  };
+}
+
 function timerState(profile) {
   const config = parseStored(profile.config, {});
   const durationSeconds = Math.max(
@@ -156,20 +163,44 @@ async function updateTimer({ db, hub }, id, body) {
       Number(config.startingSeconds ?? config.durationSeconds ?? 3600) * 1000,
     );
   } else if (body.action === "add") {
-    remainingMs += Math.round(Number(body.seconds || 0) * 1000);
+    const seconds = Number(body.seconds);
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 31_536_000) {
+      const error = new Error("Timer seconds must be a positive finite value.");
+      error.statusCode = 400;
+      throw error;
+    }
+    remainingMs += Math.round(seconds * 1000);
   } else if (body.action === "subtract") {
-    remainingMs = Math.max(0, remainingMs - Math.round(Number(body.seconds || 0) * 1000));
+    const seconds = Number(body.seconds);
+    if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 31_536_000) {
+      const error = new Error("Timer seconds must be a positive finite value.");
+      error.statusCode = 400;
+      throw error;
+    }
+    remainingMs = Math.max(0, remainingMs - Math.round(seconds * 1000));
   } else {
     const error = new Error("Unknown timer action.");
     error.statusCode = 400;
     throw error;
   }
+  if (remainingMs <= 0) running = false;
 
   const state = {
     running,
     remainingMs,
     endAt: running ? new Date(Date.now() + remainingMs).toISOString() : null,
     updatedAt: new Date().toISOString(),
+    eventCount:
+      body.action === "reset"
+        ? 0
+        : Math.max(
+            0,
+            Number(previous.eventCount || 0) +
+              (body.action === "add" && body.countEvent !== false
+                ? Math.max(1, Number(body.eventCount || 1))
+                : 0),
+          ),
+    lastEvent: body.event || previous.lastEvent || null,
   };
   const saved = {
     ...profile,
@@ -188,6 +219,7 @@ export function createHttpServer({
   services,
   backups,
   spotify,
+  twitch = null,
   discord,
   hub,
   getStatus,
@@ -202,7 +234,7 @@ export function createHttpServer({
     response.setHeader("x-frame-options", "SAMEORIGIN");
     response.setHeader(
       "content-security-policy",
-      "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss://irc-ws.chat.twitch.tv; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
+      "default-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' ws: wss://irc-ws.chat.twitch.tv https://api.betterttv.net https://api.frankerfacez.com https://7tv.io; frame-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'",
     );
 
     try {
@@ -251,6 +283,24 @@ export function createHttpServer({
         });
       }
 
+      if (request.method === "GET" && pathname.startsWith("/api/public/reactives/")) {
+        const id = pathname.slice("/api/public/reactives/".length).replace(/\/state$/, "");
+        const profile = await db.getOverlay("reactives", id);
+        if (!profile) return json(response, 404, { error: "Reactive profile not found" });
+        const channelId =
+          parseStored(profile.config, {}).voiceChannelId ||
+          config.discord.reactiveVoiceChannelId;
+        const channels = (await discord.listVoiceChannels?.()) || [];
+        const channel = channels.find((candidate) => String(candidate.id) === String(channelId));
+        return json(response, 200, {
+          channelId: channel?.id || channelId || null,
+          channelName: channel?.name || null,
+          members: channel?.members || [],
+          connected: Boolean(discord.status().reactiveSpeaking),
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
       if (request.method === "GET" && pathname === "/api/public/spotify/now-playing") {
         return json(response, 200, spotify.status());
       }
@@ -261,23 +311,64 @@ export function createHttpServer({
           return json(response, 401, { error: "Invalid event webhook token" });
         }
         const body = await readJson(request);
-        if (body.alertProfileId) {
-          hub.broadcast(`alerts:${body.alertProfileId}`, "alert", {
-            event: body.type || "custom",
-            title: body.title || body.type || "Stream event",
+        const eventType = String(body.type || "custom")
+          .trim()
+          .toLowerCase()
+          .replace(/[^a-z0-9._-]/g, "-")
+          .slice(0, 80);
+        const alertProfiles = body.alertProfileId
+          ? [await db.getOverlay("alerts", body.alertProfileId)].filter(Boolean)
+          : (await db.listOverlays("alerts")).filter((profile) => {
+              const profileConfig = parseStored(profile.config, {});
+              const enabledTypes = Array.isArray(profileConfig.eventTypes)
+                ? profileConfig.eventTypes
+                : [];
+              return (
+                profileConfig.listenAllEvents !== false &&
+                (!enabledTypes.length || enabledTypes.includes(eventType))
+              );
+            });
+        for (const profile of alertProfiles) {
+          hub.broadcast(`alerts:${profile.id}`, `twitch.${eventType}`, {
+            event: eventType,
+            eventType,
+            user: body.user || body.username || body.displayName || "",
+            title: body.title || eventType || "Stream event",
             message: body.message || "",
             image: body.image || null,
+            amount: body.amount ?? body.bits ?? body.viewers ?? body.count ?? null,
+            raw: body.data && typeof body.data === "object" ? body.data : undefined,
           });
         }
-        let timer = null;
-        if (body.timerProfileId && Number(body.seconds)) {
-          timer = await updateTimer(
-            { db, hub },
-            body.timerProfileId,
-            { action: "add", seconds: Number(body.seconds) },
+        const timerProfiles = body.timerProfileId
+          ? [await db.getOverlay("timer", body.timerProfileId)].filter(Boolean)
+          : (await db.listOverlays("timer")).filter((profile) => {
+              const timerConfig = parseStored(profile.config, {});
+              return timerConfig.eventType === eventType;
+            });
+        const timers = [];
+        for (const profile of timerProfiles) {
+          const timerConfig = parseStored(profile.config, {});
+          const seconds = Number(body.seconds ?? timerConfig.secondsPerEvent);
+          if (!Number.isFinite(seconds) || seconds <= 0) continue;
+          timers.push(
+            await updateTimer(
+              { db, hub },
+              profile.id,
+              {
+                action: "add",
+                seconds,
+                event: eventType,
+                eventCount: Number(body.count || 1),
+              },
+            ),
           );
         }
-        return json(response, 202, { ok: true, timer });
+        return json(response, 202, {
+          ok: true,
+          alertProfiles: alertProfiles.map((profile) => profile.id),
+          timers,
+        });
       }
 
       if (pathname === "/api/auth/session" && request.method === "GET") {
@@ -318,6 +409,16 @@ export function createHttpServer({
         return redirect(response, location);
       }
 
+      if (pathname === "/api/spotify/disconnect" && request.method === "POST") {
+        return json(response, 200, { status: await spotify.disconnect() });
+      }
+
+      if (pathname === "/api/twitch/test" && request.method === "POST") {
+        if (!twitch) return json(response, 503, { error: "Twitch commands are unavailable." });
+        const status = await twitch.restart();
+        return json(response, status.connected ? 200 : 202, { status });
+      }
+
       if (pathname === "/api/discord/test" && request.method === "POST") {
         let status = discord.status();
         if (!status.configured) {
@@ -335,6 +436,33 @@ export function createHttpServer({
           status,
           error: status.connected ? null : "The Discord gateway did not become ready.",
         });
+      }
+
+      if (pathname === "/api/discord/voice-channels" && request.method === "GET") {
+        if (!discord.status().connected) {
+          return json(response, 409, {
+            error: "Connect the Discord bot before choosing a live voice channel.",
+            channels: [],
+          });
+        }
+        return json(response, 200, {
+          channels: await discord.listVoiceChannels?.(),
+        });
+      }
+
+      if (pathname === "/api/discord/reactive-context" && request.method === "GET") {
+        if (!discord.status().connected) {
+          return json(response, 409, {
+            error: "Connect the Discord bot before detecting a voice channel.",
+          });
+        }
+        const preferredUserIds =
+          session.provider === "discord" ? [session.sub] : config.discord.ownerUserIds;
+        return json(
+          response,
+          200,
+          await discord.reactiveContext?.({ preferredUserIds }),
+        );
       }
 
       if (pathname === "/api/discord/publish-status" && request.method === "POST") {
@@ -382,6 +510,29 @@ export function createHttpServer({
                 ),
               },
               status: discord.status(),
+            });
+          }
+          if (settingMatch[1] === "spotify") {
+            const secretCiphertext = await db.getOauthToken("spotify-config");
+            const secrets = secretCiphertext ? vault.decrypt(secretCiphertext) : {};
+            return json(response, 200, {
+              settings: {
+                ...spotifyPublicSettings({
+                  ...config.spotify,
+                  ...(await db.getSetting(key, {})),
+                }),
+                clientSecretConfigured: Boolean(
+                  secrets.clientSecret || config.spotify?.clientSecret,
+                ),
+              },
+              status: spotify.status(),
+            });
+          }
+          if (settingMatch[1] === "twitch") {
+            if (!twitch) return json(response, 503, { error: "Twitch commands are unavailable." });
+            return json(response, 200, {
+              settings: twitch.publicSettings(),
+              status: twitch.status(),
             });
           }
           return json(response, 200, {
@@ -446,6 +597,54 @@ export function createHttpServer({
               connectionError,
             });
           }
+          if (settingMatch[1] === "spotify") {
+            const previousSettings = spotifyPublicSettings({
+              ...config.spotify,
+              ...(await db.getSetting(key, {})),
+            });
+            const previousCiphertext = await db.getOauthToken("spotify-config");
+            const previousSecrets = previousCiphertext ? vault.decrypt(previousCiphertext) : {};
+            const settings = {
+              ...previousSettings,
+              ...spotifyPublicSettings(body),
+            };
+            const secrets = {
+              clientSecret: body.clearClientSecret
+                ? ""
+                : String(
+                    body.clientSecret ||
+                      previousSecrets.clientSecret ||
+                      config.spotify?.clientSecret ||
+                      "",
+                  ).trim(),
+            };
+            const credentialsChanged =
+              settings.clientId !== previousSettings.clientId ||
+              (body.clientSecret &&
+                String(body.clientSecret).trim() !== previousSecrets.clientSecret);
+            await db.setSetting(key, settings);
+            if (secrets.clientSecret) {
+              await db.saveOauthToken("spotify-config", vault.encrypt(secrets));
+            } else {
+              await db.deleteOauthToken("spotify-config");
+            }
+            if (credentialsChanged) await spotify.disconnect();
+            spotify.updateCredentials({ ...settings, ...secrets });
+            await db.addAudit(session.sub, "settings.saved", "spotify");
+            return json(response, 200, {
+              settings: {
+                ...settings,
+                clientSecretConfigured: Boolean(secrets.clientSecret),
+              },
+              status: spotify.status(),
+            });
+          }
+          if (settingMatch[1] === "twitch") {
+            if (!twitch) return json(response, 503, { error: "Twitch commands are unavailable." });
+            const result = await twitch.updateSettings(body);
+            await db.addAudit(session.sub, "settings.saved", "twitch");
+            return json(response, 200, result);
+          }
           const settings = body;
           await db.setSetting(key, settings);
           await db.addAudit(session.sub, "settings.saved", settingMatch[1]);
@@ -465,12 +664,17 @@ export function createHttpServer({
           const profile = normalizeProfile(profilesMatch[1], await readJson(request));
           await db.saveOverlay(profile);
           await db.addAudit(session.sub, "profile.created", `${profile.type}:${profile.id}`);
+          let reactive = null;
           if (profile.type === "reactives" && profile.config?.voiceChannelId) {
-            await discord
-              .enableReactiveSpeaking?.({ channelId: profile.config.voiceChannelId })
-              .catch((error) => console.warn("[reactives]", error.message));
+            try {
+              reactive = await discord.enableReactiveSpeaking?.({
+                channelId: profile.config.voiceChannelId,
+              });
+            } catch (error) {
+              reactive = { connected: false, error: error.message };
+            }
           }
-          return json(response, 201, { profile });
+          return json(response, 201, { profile, reactive });
         }
       }
 
@@ -484,13 +688,18 @@ export function createHttpServer({
           );
           await db.saveOverlay(profile);
           await db.addAudit(session.sub, "profile.saved", `${profile.type}:${profile.id}`);
+          let reactive = null;
           if (profile.type === "reactives" && profile.config?.voiceChannelId) {
-            await discord
-              .enableReactiveSpeaking?.({ channelId: profile.config.voiceChannelId })
-              .catch((error) => console.warn("[reactives]", error.message));
+            try {
+              reactive = await discord.enableReactiveSpeaking?.({
+                channelId: profile.config.voiceChannelId,
+              });
+            } catch (error) {
+              reactive = { connected: false, error: error.message };
+            }
           }
           hub.broadcast(`${profile.type}:${profile.id}`, "config", profile);
-          return json(response, 200, { profile });
+          return json(response, 200, { profile, reactive });
         }
         if (request.method === "DELETE") {
           await db.deleteOverlay(profileMatch[1], profileMatch[2]);

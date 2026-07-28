@@ -1,5 +1,7 @@
 const TOKEN_URL = "https://accounts.spotify.com/api/token";
 const PLAYER_URL = "https://api.spotify.com/v1/me/player/currently-playing";
+const SEARCH_URL = "https://api.spotify.com/v1/search";
+const QUEUE_URL = "https://api.spotify.com/v1/me/player/queue";
 
 async function responseJson(response) {
   if (response.status === 204) return null;
@@ -31,10 +33,25 @@ export class SpotifyManager {
       client_id: this.config.spotify.clientId,
       response_type: "code",
       redirect_uri: this.config.spotify.redirectUri,
-      scope: "user-read-currently-playing user-read-playback-state",
+      scope:
+        "user-read-currently-playing user-read-playback-state user-modify-playback-state",
       state,
     });
     return `https://accounts.spotify.com/authorize?${query}`;
+  }
+
+  updateCredentials(credentials = {}) {
+    this.config.spotify = {
+      ...this.config.spotify,
+      clientId: String(credentials.clientId ?? this.config.spotify.clientId ?? "").trim() || null,
+      clientSecret:
+        String(credentials.clientSecret ?? this.config.spotify.clientSecret ?? "").trim() || null,
+      redirectUri:
+        String(credentials.redirectUri ?? this.config.spotify.redirectUri ?? "").trim() || null,
+    };
+    this.stop();
+    this.start();
+    return this.status();
   }
 
   async tokenRequest(body) {
@@ -119,12 +136,62 @@ export class SpotifyManager {
       this.hub.broadcast("spotify", "spotify", this.nowPlaying);
     } catch (error) {
       this.nowPlaying = {
-        ...this.nowPlaying,
-        connected: true,
+        connected: false,
+        playing: false,
+        track: null,
         error: error.message,
       };
     }
     return this.nowPlaying;
+  }
+
+  async authorizedFetch(url, options = {}) {
+    const token = await this.token();
+    if (!token) throw new Error("Spotify is not connected.");
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...options.headers,
+        authorization: `Bearer ${token.accessToken}`,
+      },
+    });
+    return responseJson(response);
+  }
+
+  async requestSong(query) {
+    const requested = String(query || "").trim().slice(0, 180);
+    if (!requested) throw new Error("A song title or Spotify track URL is required.");
+    let uri = null;
+    let track = null;
+    const match = requested.match(
+      /(?:open\.spotify\.com\/track\/|spotify:track:)([A-Za-z0-9]{10,})/,
+    );
+    if (match) {
+      uri = `spotify:track:${match[1]}`;
+    } else {
+      const search = await this.authorizedFetch(
+        `${SEARCH_URL}?${new URLSearchParams({ q: requested, type: "track", limit: "1" })}`,
+      );
+      track = search?.tracks?.items?.[0] || null;
+      uri = track?.uri || null;
+    }
+    if (!uri) throw new Error("Spotify could not find that track.");
+    await this.authorizedFetch(`${QUEUE_URL}?${new URLSearchParams({ uri })}`, {
+      method: "POST",
+    });
+    return {
+      uri,
+      title: track?.name || requested,
+      artists: track?.artists?.map((artist) => artist.name) || [],
+      url: track?.external_urls?.spotify || null,
+    };
+  }
+
+  async disconnect() {
+    await this.db.deleteOauthToken("spotify");
+    this.nowPlaying = { connected: false, playing: false, track: null };
+    this.hub.broadcast("spotify", "spotify.status", this.nowPlaying);
+    return this.status();
   }
 
   start() {

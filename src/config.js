@@ -71,6 +71,9 @@ export function loadConfig(env = process.env) {
       clientSecret: optional(env.SPOTIFY_CLIENT_SECRET),
       redirectUri: optional(env.SPOTIFY_REDIRECT_URI),
     },
+    twitch: {
+      oauthToken: optional(env.TWITCH_OAUTH_TOKEN),
+    },
     rcloneRemote: optional(env.RCLONE_REMOTE),
   };
 }
@@ -89,6 +92,7 @@ export function describeConfig(config) {
     spotifyConfigured: Boolean(
       config.spotify.clientId && config.spotify.clientSecret && config.spotify.redirectUri,
     ),
+    twitchConfigured: Boolean(config.twitch?.oauthToken),
     cloudBackupConfigured: Boolean(config.rcloneRemote),
   };
 }

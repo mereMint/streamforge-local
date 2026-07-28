@@ -59,10 +59,12 @@ Open `~/streamforge-local/.env` locally and copy its generated
 `DASHBOARD_TOKEN`; do not show it on stream or send it to anyone. Use it as the
 dashboard's local access key. Configure the Discord bot from the dashboard's
 **Settings → Discord** page; bot secrets are encrypted in the local database
-and the bot is restarted after a successful save.
+and the bot is restarted after a successful save. Spotify app credentials and
+the Twitch command-bot token can also be saved from their dashboard pages, so
+those integrations no longer require editing `.env` after installation.
 
-Features with no credentials stay dormant. Spotify and low-level network
-bootstrap values are still configured in `.env`, as described in
+Features with no credentials stay dormant. `.env` remains available for
+bootstrap defaults and low-level network values, as described in
 [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). The installer adds one lifecycle
 command:
 

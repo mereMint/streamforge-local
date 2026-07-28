@@ -6,22 +6,34 @@ const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const PROFILE_TYPES = ["chat", "alerts", "reactives", "timer", "spotify"];
 const NUMBER_FIELDS = new Set([
   "messageLimit", "fontSize", "opacity", "duration", "radius", "width", "height",
-  "secondsPerEvent", "startingSeconds", "goal", "backupRetention", "voiceDefaultLimit"
+  "secondsPerEvent", "startingSeconds", "goal", "backupRetention", "voiceDefaultLimit",
+  "fontWeight", "lineHeight", "messageSpacing", "messageRadius", "emoteScale",
+  "digitSize", "panelOpacity", "intervalMinutes", "cooldownSeconds"
 ]);
 
 const DEFAULT_PROFILES = {
   chat: {
     id: "default", name: "Main chat", channel: "", messageLimit: 20, showBadges: true,
     fontFamily: "System Sans", fontSize: 28, textColor: "#f5f7fb",
-    accentColor: "#37e6b2", backgroundColor: "#0b1119", opacity: 82, animation: "rise"
+    accentColor: "#37e6b2", backgroundColor: "#0b1119", opacity: 82, animation: "rise",
+    layout: "cards", fontWeight: 650, lineHeight: 1.35, messageSpacing: 10,
+    messageRadius: 14, showTimestamps: false, showTwitchEmotes: true,
+    showBttvEmotes: true, showFfzEmotes: true, showSevenTvEmotes: true,
+    emoteScale: 1, blockedUsers: "", blockedBots: "", hideCommands: false,
+    ignoredCommands: "", blockedWords: ""
   },
   alerts: {
     id: "default", name: "Main alerts", headline: "{user} just followed!",
-    message: "Welcome to the forge.", duration: 7, animation: "impact", layout: "badge",
-    textColor: "#ffffff", accentColor: "#ffb454", backgroundColor: "#101722", radius: 18
+    message: "Welcome to the forge.", duration: 7, animation: "impact",
+    exitAnimation: "fade", layout: "badge", position: "center", fontFamily: "System Sans",
+    textColor: "#ffffff", accentColor: "#ffb454", backgroundColor: "#101722", radius: 18,
+    listenAllEvents: true
   },
   reactives: {
-    id: "default", name: "Podcast", width: 1920, height: 1080, backgroundColor: "#121923",
+    id: "default", name: "Podcast", width: 1920, height: 1080,
+    backgroundColor: "#121923", voiceChannelId: "", autoAddMembers: true,
+    useDiscordAvatars: true, talkingAnimation: "bounce", mutedStyle: "dim",
+    showNames: true,
     participants: [
       { id: createClientId(), name: "Host", discordUserId: "", idleUrl: "", talkingUrl: "", x: 36, y: 58, size: 28 },
       { id: createClientId(), name: "Guest", discordUserId: "", idleUrl: "", talkingUrl: "", x: 65, y: 58, size: 28 }
@@ -30,12 +42,15 @@ const DEFAULT_PROFILES = {
   timer: {
     id: "default", name: "Follow timer", label: "THE FORGE STAYS LIVE", eventType: "follow",
     secondsPerEvent: 300, startingSeconds: 7200, goal: 50, layout: "industrial",
-    textColor: "#f7fbff", accentColor: "#37e6b2", backgroundColor: "#0e151d"
+    textColor: "#f7fbff", accentColor: "#37e6b2", backgroundColor: "#0e151d",
+    fontFamily: "Monospace", digitSize: 94, panelOpacity: 92, radius: 18,
+    align: "center", showLabel: true, showMeta: true, showProgress: false
   },
   spotify: {
     id: "default", name: "Now playing", displayMode: "change", duration: 12,
     position: "bottom-left", showAlbumArt: true, showProgress: true, layout: "card",
-    textColor: "#ffffff", accentColor: "#1ed760", backgroundColor: "#121816"
+    textColor: "#ffffff", accentColor: "#1ed760", backgroundColor: "#121816",
+    intervalMinutes: 5, animation: "slide"
   }
 };
 
@@ -48,7 +63,8 @@ const state = {
   currentProfiles: {},
   loadedProfiles: new Set(),
   publicOrigin: location.origin,
-  draggingParticipant: null
+  draggingParticipant: null,
+  twitchCommands: []
 };
 
 class ApiError extends Error {
@@ -111,7 +127,8 @@ function showApp(session = {}) {
     avatar.textContent = "";
   }
   connectSocket();
-  navigate(location.hash.slice(1) || "overview", false);
+  const requestedView = new URLSearchParams(location.search).get("view");
+  navigate(location.hash.slice(1) || requestedView || "overview", false);
 }
 
 function initials(value) {
@@ -176,12 +193,24 @@ function bindGlobalEvents() {
   });
 
   $("#addParticipant").addEventListener("click", addParticipant);
+  $("#syncReactiveChannel")?.addEventListener("click", detectReactiveChannel);
   $("#sceneStage").addEventListener("pointerdown", beginParticipantDrag);
   window.addEventListener("pointermove", moveParticipant);
   window.addEventListener("pointerup", endParticipantDrag);
 
   $("#publishStatusPanel").addEventListener("click", () => discordAction("publish-status"));
   $("#testDiscord").addEventListener("click", () => discordAction("test"));
+  $("#spotifyDisconnect")?.addEventListener("click", disconnectSpotify);
+  $("#addTwitchCommand")?.addEventListener("click", addTwitchCommand);
+  $("#testTwitch")?.addEventListener("click", testTwitchConnection);
+  $("#twitchPreviewMessage")?.addEventListener("input", renderTwitchCommandPreview);
+  $('[data-settings-form="twitch"]')?.addEventListener("input", renderTwitchCommandPreview);
+  $("#spotifyConnectButton")?.addEventListener("click", (event) => {
+    if (event.currentTarget.getAttribute("aria-disabled") === "true") {
+      event.preventDefault();
+      toast("Save the Spotify app credentials first.", "error");
+    }
+  });
   $("#backupNow").addEventListener("click", runBackup);
   $("#testBackup").addEventListener("click", () => backupAction("test"));
   $("#refreshBackups").addEventListener("click", loadBackups);
@@ -252,7 +281,7 @@ function routeTitle(route) {
   return {
     overview: "Overview", services: "Services", chat: "Twitch Chat", alerts: "Alerts",
     reactives: "Reactive Scene", timer: "Stream Timer", spotify: "Now Playing",
-    discord: "Discord Bot", settings: "Backup & Settings"
+    twitch: "Twitch Commands", discord: "Discord Bot", settings: "Backup & Settings"
   }[route] || "Control Room";
 }
 
@@ -260,6 +289,9 @@ async function loadRoute(route) {
   if (route === "overview") await refreshStatus();
   if (route === "services") await loadServices();
   if (PROFILE_TYPES.includes(route)) await loadProfiles(route);
+  if (route === "reactives") await loadReactiveChannels();
+  if (route === "spotify") await loadSettings("spotify");
+  if (route === "twitch") await loadSettings("twitch");
   if (route === "discord") await loadSettings("discord");
   if (route === "settings") {
     await Promise.allSettled([loadSettings("general"), loadBackups()]);
@@ -304,6 +336,7 @@ function handleSocketMessage(event) {
   }
   if (type.startsWith("discord.")) renderDiscordStatus(payload);
   if (type === "spotify.status") renderSpotifyStatus(payload);
+  if (type.startsWith("twitch.")) renderTwitchStatus(payload);
   if (type === "activity" || event.message) {
     addActivity(event.message || payload.message || type, payload.level || event.level || "info");
   }
@@ -338,6 +371,7 @@ function renderStatus(data) {
     : "Your local stream stack is listening for commands.";
   renderDiscordStatus(data.discord || {});
   renderSpotifyStatus(data.spotify || {});
+  renderTwitchStatus(data.twitch || {});
 
   const hostMemory = data.host?.memory || {};
   const derivedMemoryPercent = hostMemory.totalBytes
@@ -377,8 +411,28 @@ function renderDiscordStatus(discord) {
 function renderSpotifyStatus(spotify) {
   const connected = Boolean(spotify.connected);
   $("#spotifyState").textContent = connected ? "Connected" : "Not connected";
-  $("#spotifyDetail").textContent = spotify.track?.name || spotify.track?.title || (connected ? "Waiting for playback" : "Optional integration");
-  $("#spotifyPreviewStatus").textContent = spotify.track?.name || spotify.track?.title || (connected ? "No song playing" : "Waiting for Spotify");
+  $("#spotifyDetail").textContent = spotify.error || spotify.track?.name || spotify.track?.title || (
+    connected ? "Waiting for playback" : spotify.configured ? "Ready to connect" : "Setup required"
+  );
+  $("#spotifyPreviewStatus").textContent = spotify.error || spotify.track?.name || spotify.track?.title || (
+    connected ? "No song playing" : spotify.configured ? "Ready to connect" : "Sample preview"
+  );
+  $("#spotifyDisconnect")?.toggleAttribute("hidden", !connected);
+}
+
+function renderTwitchStatus(twitch = {}) {
+  const pill = $("#twitchConnectionPill");
+  if (pill) {
+    pill.classList.toggle("is-online", Boolean(twitch.connected));
+    $("span", pill).textContent = twitch.connected
+      ? `Connected to #${twitch.channel || "channel"}`
+      : twitch.enabled
+        ? "Reconnecting"
+        : "Disabled";
+  }
+  if ($("#twitchConnectionError")) {
+    $("#twitchConnectionError").textContent = twitch.connectionError || "";
+  }
 }
 
 function setMeter(name, value) {
@@ -651,6 +705,9 @@ async function saveProfile(event, type) {
     updateOverlayUrl(type);
     setPreviewSource(type);
     toast(`${profile.name} saved.`);
+    if (type === "reactives" && saved?.reactive?.error) {
+      toast(`Scene saved, but Discord live mode could not start: ${saved.reactive.error}`, "error");
+    }
   } catch (error) {
     toast(error.message, "error");
   }
@@ -738,9 +795,18 @@ async function testOverlay(type) {
   if (!profile) return;
   postPreviewConfig(type);
   const sample = {
-    chat: { user: "ForgeViewer", message: "This chat style looks great!", color: "#ffb454", badges: ["MOD"] },
-    alerts: { eventType: "follow", user: "ForgeViewer", message: "Welcome to the forge." },
-    reactives: { participantId: profile.participants?.[0]?.id, speaking: true },
+    chat: { user: "ForgeViewer", username: "forgeviewer", message: "This chat style looks great! PogChamp", color: "#ffb454", badges: ["MOD"] },
+    alerts: {
+      eventType: $("#alertPreviewEvent")?.value || "follow",
+      user: "ForgeViewer",
+      amount: 100,
+      message: "Welcome to the forge."
+    },
+    reactives: {
+      participantId: profile.participants?.[0]?.id,
+      userId: profile.participants?.[0]?.discordUserId,
+      speaking: true
+    },
     spotify: { track: { name: "Midnight Circuit", artist: "Signal Array", album: "Afterglow", progressMs: 74000, durationMs: 218000 } }
   }[type] || {};
   const iframe = $(`[data-overlay-preview="${type}"]`);
@@ -792,6 +858,8 @@ function addParticipant() {
     discordUserId: "",
     idleUrl: "",
     talkingUrl: "",
+    mutedUrl: "",
+    deafenedUrl: "",
     x: 50,
     y: 58,
     size: 26
@@ -872,6 +940,10 @@ function endParticipantDrag(event) {
 async function controlTimer(action) {
   const profile = getCurrentProfile("timer");
   if (!profile) return;
+  if (!profile._persisted) {
+    toast("Save this timer profile before using live controls.", "error");
+    return;
+  }
   if (action === "reset" && !window.confirm("Reset this timer to its configured starting time?")) return;
   try {
     await api(`/api/timer/${encodeURIComponent(profile.id)}/control`, {
@@ -891,6 +963,7 @@ function bindSettingsForm(form) {
     const scope = form.dataset.settingsForm;
     try {
       const values = formValues(form);
+      if (scope === "twitch") values.commands = state.twitchCommands;
       const result = await api(`/api/settings/${scope}`, { method: "PUT", body: values });
       if (scope === "general") {
         state.publicOrigin = result?.settings?.publicOrigin || result?.publicOrigin || values.publicOrigin || location.origin;
@@ -905,8 +978,34 @@ function bindSettingsForm(form) {
         renderDiscordConfiguration(result, submittedSecrets);
         if (result?.status) renderDiscordStatus(result.status);
       }
+      if (scope === "spotify") {
+        $$("[data-secret]", form).forEach((input) => { input.value = ""; });
+        renderSpotifyConfiguration(result, {
+          clientSecretConfigured: Boolean(values.clientSecret)
+        });
+        renderSpotifyStatus(result?.status || {});
+      }
+      if (scope === "twitch") {
+        $$("[data-secret]", form).forEach((input) => { input.value = ""; });
+        state.twitchCommands = result?.settings?.commands || state.twitchCommands;
+        const tokenInput = $('[data-settings-form="twitch"] [name="oauthToken"]');
+        if (tokenInput) {
+          tokenInput.placeholder = result?.settings?.oauthTokenConfigured
+            ? "Configured ••••••••"
+            : "oauth:…";
+        }
+        renderTwitchCommands();
+        renderTwitchStatus(result?.status || {});
+      }
       setSaved(form);
-      toast(`${scope === "discord" ? "Discord" : "Server"} settings saved.`);
+      const label = {
+        discord: "Discord",
+        spotify: "Spotify",
+        twitch: "Twitch",
+        general: "Server",
+        backup: "Backup",
+      }[scope] || "Server";
+      toast(`${label} settings saved.`);
     } catch (error) {
       toast(error.message, "error");
     }
@@ -937,6 +1036,21 @@ async function loadSettings(scope) {
     if (scope === "discord") {
       renderDiscordConfiguration(response, data);
       if (response?.status || data.status) renderDiscordStatus(response?.status || data.status);
+    }
+    if (scope === "spotify") {
+      renderSpotifyConfiguration(response, data);
+      renderSpotifyStatus(response?.status || data.status || {});
+    }
+    if (scope === "twitch") {
+      state.twitchCommands = Array.isArray(data.commands) ? data.commands : [];
+      const tokenInput = $('[data-settings-form="twitch"] [name="oauthToken"]');
+      if (tokenInput) {
+        tokenInput.placeholder = data.oauthTokenConfigured
+          ? "Configured ••••••••"
+          : "oauth:…";
+      }
+      renderTwitchCommands();
+      renderTwitchStatus(response?.status || data.status || {});
     }
     setSaved(form);
   } catch (error) {
@@ -974,6 +1088,178 @@ function renderDiscordConfiguration(response = {}, fallback = {}) {
     fallback.connectionError ||
     "";
   $("#discordConnectionError").textContent = connectionError;
+}
+
+function renderSpotifyConfiguration(response = {}, fallback = {}) {
+  const settings = response?.settings || {};
+  const configured = Boolean(
+    response?.clientSecretConfigured ??
+    settings.clientSecretConfigured ??
+    fallback.clientSecretConfigured
+  );
+  const input = $('[data-settings-form="spotify"] [name="clientSecret"]');
+  if (input) input.placeholder = configured ? "Configured ••••••••" : "Spotify app secret";
+  setCredentialFlag("#spotifyClientSecretFlag", "Client secret", configured);
+  const connect = $("#spotifyConnectButton");
+  const ready = Boolean(settings.clientId && settings.redirectUri && configured);
+  if (connect) {
+    connect.classList.toggle("is-disabled", !ready);
+    connect.setAttribute("aria-disabled", String(!ready));
+    connect.title = ready ? "Authorize Spotify" : "Save Spotify app credentials first";
+  }
+  $("#spotifySetupError").textContent = response?.status?.error || "";
+}
+
+async function disconnectSpotify() {
+  try {
+    const result = await api("/api/spotify/disconnect", { method: "POST" });
+    renderSpotifyStatus(result?.status || {});
+    toast("Spotify disconnected.");
+  } catch (error) {
+    toast(error.message, "error");
+  }
+}
+
+async function loadReactiveChannels() {
+  const select = $('[name="voiceChannelId"]');
+  if (!select) return;
+  const current = getCurrentProfile("reactives")?.voiceChannelId || select.value;
+  try {
+    const data = await api("/api/discord/voice-channels");
+    select.innerHTML = '<option value="">Choose a Discord voice channel</option>';
+    for (const channel of data.channels || []) {
+      const option = document.createElement("option");
+      option.value = channel.id;
+      option.textContent = `${channel.name} · ${channel.memberCount} online`;
+      option.selected = String(channel.id) === String(current);
+      select.append(option);
+    }
+  } catch (error) {
+    select.innerHTML = '<option value="">Connect Discord to discover channels</option>';
+    if (error.status !== 409) toast(error.message, "error");
+  }
+}
+
+async function detectReactiveChannel() {
+  const button = $("#syncReactiveChannel");
+  button.disabled = true;
+  try {
+    const context = await api("/api/discord/reactive-context");
+    if (!context.selectedChannelId) throw new Error("No occupied Discord voice channel was found.");
+    await loadReactiveChannels();
+    const select = $('[name="voiceChannelId"]');
+    select.value = context.selectedChannelId;
+    const profile = getCurrentProfile("reactives");
+    if (profile) profile.voiceChannelId = context.selectedChannelId;
+    markDirty($('[data-profile-form="reactives"]'));
+    postPreviewConfig("reactives");
+    toast("Current Discord voice channel selected.");
+  } catch (error) {
+    toast(error.message, "error");
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderTwitchCommands() {
+  const list = $("#twitchCommandList");
+  if (!list) return;
+  list.innerHTML = "";
+  for (const command of state.twitchCommands) {
+    const card = document.createElement("article");
+    card.className = "command-card";
+    card.dataset.commandId = command.id;
+    card.innerHTML = `
+      <div class="command-card__header">
+        <label class="toggle"><input data-command-field="enabled" type="checkbox"><span></span><strong data-command-title>!command</strong></label>
+        <button class="icon-button" type="button" data-remove-command aria-label="Remove command">×</button>
+      </div>
+      <div class="field-row field-row--three">
+        <label class="field"><span>Trigger</span><div class="input-suffix"><span>!</span><input data-command-field="trigger" maxlength="32"></div></label>
+        <label class="field"><span>Action</span><select data-command-field="action"><option value="custom">Custom reply</option><option value="now-playing">Current song</option><option value="playlist">Playlist link</option><option value="song-request">Song request</option></select></label>
+        <label class="field"><span>Who can use it</span><select data-command-field="permission"><option value="everyone">Everyone</option><option value="subscriber">Subscribers</option><option value="moderator">Moderators</option><option value="broadcaster">Broadcaster</option></select></label>
+      </div>
+      <label class="field"><span>Reply template</span><input data-command-field="response" maxlength="450"><small>Variables: {user}, {args}, {song}, {artist}, {playlist}.</small></label>
+      <label class="field command-cooldown"><span>Global cooldown</span><div class="input-suffix"><input data-command-field="cooldownSeconds" type="number" min="0" max="3600"><span>sec</span></div></label>`;
+    for (const input of $$("[data-command-field]", card)) {
+      const field = input.dataset.commandField;
+      if (input.type === "checkbox") input.checked = command[field] !== false;
+      else input.value = command[field] ?? "";
+      input.addEventListener("input", () => {
+        command[field] = input.type === "checkbox"
+          ? input.checked
+          : input.type === "number"
+            ? Number(input.value)
+            : input.value;
+        $("[data-command-title]", card).textContent = `!${command.trigger || "command"}`;
+        markDirty($('[data-settings-form="twitch"]'));
+        renderTwitchCommandPreview();
+      });
+    }
+    $("[data-command-title]", card).textContent = `!${command.trigger || "command"}`;
+    $("[data-remove-command]", card).addEventListener("click", () => {
+      state.twitchCommands = state.twitchCommands.filter((item) => item.id !== command.id);
+      renderTwitchCommands();
+      markDirty($('[data-settings-form="twitch"]'));
+    });
+    list.append(card);
+  }
+  if (!state.twitchCommands.length) {
+    list.append(emptyState("No commands yet", "Add a safe dashboard command for your viewers."));
+  }
+  renderTwitchCommandPreview();
+}
+
+function addTwitchCommand() {
+  state.twitchCommands.push({
+    id: createClientId(),
+    trigger: `command${state.twitchCommands.length + 1}`,
+    action: "custom",
+    response: "Thanks, {user}!",
+    enabled: true,
+    permission: "everyone",
+    cooldownSeconds: 10
+  });
+  renderTwitchCommands();
+  markDirty($('[data-settings-form="twitch"]'));
+}
+
+function renderTwitchCommandPreview() {
+  const input = $("#twitchPreviewMessage");
+  const output = $("#twitchPreviewReply");
+  if (!input || !output) return;
+  const prefix = $('[data-settings-form="twitch"] [name="commandPrefix"]')?.value || "!";
+  const text = input.value || `${prefix}song`;
+  const [trigger, ...args] = text.trim().slice(prefix.length).split(/\s+/);
+  const command = state.twitchCommands.find(
+    (item) => item.enabled !== false && item.trigger.toLowerCase() === String(trigger).toLowerCase(),
+  );
+  if (!command) {
+    output.textContent = "No enabled command matches this message.";
+    return;
+  }
+  const templates = {
+    custom: command.response || "{user}: {args}",
+    "now-playing": command.response || "Now playing: {song} — {artist}",
+    playlist: command.response || "Stream playlist: {playlist}",
+    "song-request": command.response || "{user}, queued {song}."
+  };
+  output.textContent = templates[command.action]
+    .replaceAll("{user}", "ForgeViewer")
+    .replaceAll("{args}", args.join(" "))
+    .replaceAll("{song}", command.action === "song-request" ? args.join(" ") || "your song" : "Midnight Circuit")
+    .replaceAll("{artist}", "Signal Array")
+    .replaceAll("{playlist}", $('[data-settings-form="twitch"] [name="playlistUrl"]')?.value || "https://open.spotify.com/playlist/…");
+}
+
+async function testTwitchConnection() {
+  try {
+    const result = await api("/api/twitch/test", { method: "POST" });
+    renderTwitchStatus(result?.status || {});
+    toast("Twitch command bot connection refreshed.");
+  } catch (error) {
+    toast(error.message, "error");
+  }
 }
 
 function setCredentialFlag(selector, label, configured) {

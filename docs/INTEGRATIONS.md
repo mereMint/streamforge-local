@@ -97,8 +97,12 @@ recommends least privilege.
 ## Spotify now playing
 
 Create an app in the
-[Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Set
-`SPOTIFY_CLIENT_ID` and `SPOTIFY_CLIENT_SECRET`.
+[Spotify Developer Dashboard](https://developer.spotify.com/dashboard). Open
+**Now Playing** in StreamForge, save the app client ID, client secret, and exact
+redirect URI, then select **Connect Spotify**. The secret and OAuth tokens are
+encrypted in the local database. `SPOTIFY_CLIENT_ID`,
+`SPOTIFY_CLIENT_SECRET`, and `SPOTIFY_REDIRECT_URI` remain available as
+optional bootstrap defaults.
 
 For normal use, register a trusted HTTPS callback and copy it exactly:
 
@@ -125,10 +129,11 @@ URI through the tunnel. The redirect string in Spotify and `.env` must match
 exactly.
 
 The now-playing integration requests playback-state/currently-playing access
-and polls at `SPOTIFY_POLL_SECONDS` (default 10) to be gentle on the phone and
-API. As of July 2026, Spotify Development Mode requires the app owner to have
-Premium and allows up to five authorized users; each user must be allowlisted.
-Spotify also introduced six-month refresh-token expiration, so an occasional
+and playback queue access for the optional `!sr` Twitch command. It polls at
+`SPOTIFY_POLL_SECONDS` (default 10) to be gentle on the phone and API. As of
+July 2026, Spotify Development Mode requires the app owner to have Premium and
+allows up to five authorized users; each user must be allowlisted. Spotify also
+introduced six-month refresh-token expiration, so an occasional
 reauthorization is expected. Check Spotify's current
 [quota-mode rules](https://developer.spotify.com/documentation/web-api/concepts/quota-modes),
 [redirect URI rules](https://developer.spotify.com/documentation/web-api/concepts/redirect_uri),
@@ -183,10 +188,26 @@ phone.
 Create chat and alert profiles in the dashboard, then use the `chat` and
 `alerts` OBS URLs above. The current chat overlay connects read-only to Twitch
 IRC as an anonymous viewer, so it only needs the channel name saved in the chat
-profile; it does not store a Twitch password.
+profile; it does not store a Twitch password. Twitch-native emotes plus the
+enabled 7TV, BetterTTV, and FrankerFaceZ sets are resolved by the overlay.
+Exact blocked users, known bots, commands, and phrases are filtered before a
+message is rendered.
 
-Follow, subscription, raid, tip, and timer events enter through StreamForge's
-authenticated LAN webhook. Generate a separate random value locally, put it in
+### Viewer commands
+
+Open **Twitch Commands** to configure a dedicated bot account, channel, command
+prefix, Spotify playlist, and commands. The OAuth chat token is encrypted
+locally. Give it only Twitch chat read/write access. Commands are declarative:
+they can return a custom template, show the current Spotify track, share the
+playlist, or request a track through Spotify's queue. They cannot execute shell
+commands or arbitrary code. Permissions and global cooldowns are enforced
+before a reply is sent.
+
+Follow, subscription, resubscription, gift-sub, bits, raid, channel-points,
+hype-train, goal, poll, prediction, shoutout, charity, tip, merch, and other
+normalized events enter through StreamForge's authenticated LAN webhook.
+Unknown future event names are also displayed with a generated label instead
+of being discarded. Generate a separate random value locally, put it in
 `.env`, and restart:
 
 ```sh
@@ -214,12 +235,15 @@ Content-Type: application/json
 }
 ```
 
-`alertProfileId` and `timerProfileId` are independently optional. A timer event
-adds the explicit `seconds` value, allowing the companion automation to choose
-different amounts for follows, subscriptions, or raids. Keep this webhook on
-the LAN and never put its token in an OBS URL. Native Twitch OAuth/EventSub
-management is not part of the phone-first MVP; the companion bridge owns that
-provider connection.
+`alertProfileId` and `timerProfileId` are independently optional. If the alert
+profile is omitted, the event is fanned out to alert profiles that accept all
+events. If the timer profile is omitted, matching timer profiles use their
+saved event type and seconds-per-event rule. User, image, amount, count, and
+message fields are preserved. Keep this webhook on the LAN and never put its
+token in an OBS URL. The built-in authenticated Twitch chat connection also
+recognizes subscription, resub, gift-sub, bits, and raid notices. Follow,
+channel-points, and the broader Twitch event catalog still come from the
+companion EventSub bridge.
 
 ## Google Drive backups with rclone
 
