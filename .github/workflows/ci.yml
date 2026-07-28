@@ -32,7 +32,7 @@ jobs:
         run: npm test
 
       - name: Check shell syntax
-        run: bash -n install.sh scripts/backup.sh scripts/restore.sh
+        run: bash -n install.sh scripts/*.sh
 
       - name: Run ShellCheck
-        run: shellcheck install.sh scripts/backup.sh scripts/restore.sh
+        run: shellcheck install.sh scripts/*.sh

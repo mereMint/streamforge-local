@@ -21,12 +21,13 @@ Termux:Boot app is installed and opened once.
 Paste this as one command:
 
 ```sh
-pkg update -y && pkg install -y curl && set -o pipefail && curl -fsSL https://raw.githubusercontent.com/mereMint/streamforge-local/main/install.sh | bash
+pkg update -y && pkg install -y git && ( STREAMFORGE_BOOTSTRAP="$(mktemp -d)" && trap 'rm -rf -- "$STREAMFORGE_BOOTSTRAP"' EXIT && git clone --depth 1 https://github.com/mereMint/streamforge-local.git "$STREAMFORGE_BOOTSTRAP/source" && bash "$STREAMFORGE_BOOTSTRAP/source/install.sh" )
 ```
 
 No GitHub login or access token is required to install or update. The installer
-uses public HTTPS for the source checkout. GitHub CLI is installed so you can
-optionally authenticate later when pushing your own phone-side edits.
+uses a temporary shallow Git checkout to obtain the complete current installer,
+then safely installs or updates the main checkout at
+`~/streamforge-local`. It does not stream a partial script through `curl`.
 
 The default install directory is `~/streamforge-local`. Advanced overrides are
 available for a deliberate fork or location:
@@ -39,6 +40,10 @@ On a rerun, the installer only fast-forwards a clean `main` checkout. It leaves
 uncommitted or untracked work alone and stops if histories have diverged.
 Before reporting success it verifies the local `/health` endpoint and runs
 `npm run doctor -- --require-running`.
+
+If the command fails, copy its complete output. The first line beginning with
+`Error:` identifies the stage that failed; the installed checkout and existing
+configuration are left in place for a safe retry.
 
 ## 3. Add an SSH key without enabling a password
 
@@ -123,14 +128,40 @@ light, but Android may still kill it under severe device memory pressure.
 
 ## 5. Service operation
 
-The installer uses Termux's `runit` supervisor:
+The installer adds a `streamforge` command. Use it instead of depending on
+Termux service internals:
 
 ```sh
-sv status streamforge
-sv up streamforge
-sv restart streamforge
-sv down streamforge
-svlogtail streamforge
+streamforge status
+streamforge start
+streamforge restart
+streamforge stop
+streamforge logs
+streamforge logs -f
+```
+
+The command prefers the installed `runit` service. If the supervisor has not
+started yet, it tries to start it; if runit is unavailable, it uses a guarded
+PID-file fallback and writes to `~/streamforge-local/.runtime/streamforge.log`.
+That fallback also makes the command usable on a preliminary generic Linux
+installation.
+
+The same operations remain available directly from the checkout:
+
+```sh
+cd ~/streamforge-local
+bash scripts/start.sh
+bash scripts/stop.sh
+bash scripts/restart.sh
+bash scripts/status.sh
+bash scripts/logs.sh
+```
+
+For debugging, run the server in the foreground so startup errors remain in the
+terminal:
+
+```sh
+bash ~/streamforge-local/scripts/run.sh
 ```
 
 SSH is managed the same way:
@@ -156,7 +187,7 @@ service after changing `.env` or server code:
 
 ```sh
 cd ~/streamforge-local
-sv restart streamforge
+streamforge restart
 ```
 
 For a safer OAuth setup from the PC, create a loopback tunnel:

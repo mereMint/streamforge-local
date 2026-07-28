@@ -85,7 +85,7 @@ settings, moves the owner, and deletes the generated channel once empty.
 Inspect the restarted bot:
 
 ```sh
-svlogtail streamforge
+streamforge logs
 ```
 
 Never paste a bot token into Discord chat. Discord's official
@@ -277,10 +277,11 @@ authorization flows.
 ## GitHub access for phone-side edits
 
 Installation and updates are public and do not require a GitHub login. If you
-want to commit and push changes made over SSH, authenticate GitHub CLI and
-check which account Termux uses:
+want to commit and push changes made over SSH, install and authenticate the
+optional GitHub CLI, then check which account Termux uses:
 
 ```sh
+pkg install -y gh
 gh auth status --hostname github.com
 gh repo view mereMint/streamforge-local
 ```

@@ -44,7 +44,22 @@ require_safe_install_dir() {
 install_termux_packages() {
   info "Installing the small native Termux runtime"
   command -v pkg >/dev/null 2>&1 || die "Termux was detected, but pkg is unavailable."
-  pkg install -y nodejs-lts git openssh termux-services rclone gh
+  # npm is an explicit package on current Termux releases. Do not rely on
+  # nodejs-lts recommendations being enabled in the user's apt configuration.
+  pkg install -y nodejs-lts npm git openssh termux-services
+
+  # Backups work locally without rclone. Keep cloud-sync setup optional so a
+  # mirror that temporarily lacks rclone cannot prevent the server from booting.
+  if ! command -v rclone >/dev/null 2>&1; then
+    pkg install -y rclone ||
+      warn "rclone could not be installed. StreamForge will still run; cloud backup remains disabled."
+  fi
+
+  local command_name
+  for command_name in node npm git sshd sv service-daemon; do
+    command -v "$command_name" >/dev/null 2>&1 ||
+      die "The Termux package install completed without the required command: $command_name"
+  done
 }
 
 check_linux_runtime() {
@@ -226,30 +241,29 @@ shell_single_quote() {
 
 install_termux_services() {
   local service_dir="$PREFIX/var/service/$SERVICE_NAME"
-  local log_dir="$DATA_DIR_PATH/logs/runit"
+  local log_dir="$PREFIX/var/log/sv/$SERVICE_NAME"
   local run_file="$service_dir/run"
   local log_run_file="$service_dir/log/run"
-  local quoted_install quoted_log
+  local quoted_install
 
   quoted_install="$(shell_single_quote "$INSTALL_DIR")"
-  quoted_log="$(shell_single_quote "$log_dir")"
 
   info "Installing runit services for StreamForge and SSH"
   mkdir -p "$service_dir/log" "$log_dir" "$HOME/.termux/boot"
+  # Keep a newly discovered service down until every file has been written.
+  touch "$service_dir/down"
 
   {
     printf '#!%s/bin/sh\n' "$PREFIX"
     printf 'cd %s || exit 111\n' "$quoted_install"
+    printf 'exec 2>&1\n'
     printf 'exec env NODE_ENV=production %s/bin/node src/main.js\n' "$(shell_single_quote "$PREFIX")"
   } > "$run_file"
 
-  {
-    printf '#!%s/bin/sh\n' "$PREFIX"
-    printf 'exec %s/bin/svlogd -tt %s\n' "$(shell_single_quote "$PREFIX")" "$quoted_log"
-  } > "$log_run_file"
-
+  ln -sfn "$PREFIX/share/termux-services/svlogger" "$log_run_file"
   printf '%s\n' 's1000000' 'n5' 't86400' > "$log_dir/config"
-  chmod 700 "$run_file" "$log_run_file"
+  chmod 700 "$run_file"
+  ln -sfn "$INSTALL_DIR/scripts/streamforge.sh" "$PREFIX/bin/streamforge"
 
   # Termux:Boot runs this file when that optional Android app is installed.
   # It intentionally does not take a permanent wake lock.
@@ -259,19 +273,15 @@ install_termux_services() {
   } > "$HOME/.termux/boot/start-streamforge-services"
   chmod 700 "$HOME/.termux/boot/start-streamforge-services"
 
-  if [[ -r "$PREFIX/etc/profile.d/start-services.sh" ]]; then
-    # A fresh termux-services install normally waits for the next interactive
-    # shell. Source its official profile entrypoint so this one-command setup
-    # can start runsvdir immediately.
-    # shellcheck source=/dev/null
-    . "$PREFIX/etc/profile.d/start-services.sh" >/dev/null 2>&1 || true
-  fi
-
-  sv-enable sshd >/dev/null
-  sv-enable "$SERVICE_NAME" >/dev/null
+  # The official termux-services profile normally starts this daemon only
+  # after opening a new shell. Start it explicitly so a one-command install
+  # can finish in the current fresh shell.
+  export SVDIR="$PREFIX/var/service"
+  export LOGDIR="$PREFIX/var/log"
+  service-daemon start >/dev/null 2>&1 || true
 
   local attempt
-  for ((attempt = 0; attempt < 50; attempt++)); do
+  for ((attempt = 0; attempt < 150; attempt++)); do
     if sv status "$SERVICE_NAME" >/dev/null 2>&1 &&
        sv status sshd >/dev/null 2>&1; then
       break
@@ -283,6 +293,10 @@ install_termux_services() {
   sv status sshd >/dev/null 2>&1 ||
     die "The runit supervisor did not discover sshd. Reopen Termux and run install.sh again."
 
+  # Equivalent to sv-enable, but done only after runsvdir has discovered both
+  # services. Calling sv-enable too early aborts a fresh install.
+  rm -f "$service_dir/down" "$PREFIX/var/service/sshd/down"
+  sv restart "$SERVICE_NAME/log" >/dev/null 2>&1 || true
   sv restart "$SERVICE_NAME" >/dev/null
   sv status "$SERVICE_NAME" 2>/dev/null | grep -q '^run:' ||
     die "StreamForge did not reach the running state."
@@ -309,21 +323,39 @@ install_termux_services() {
   ' || die "sshd reports running, but port 8022 is not accepting local connections."
 }
 
-verify_running_server() {
-  local port health_url tls_cert tls_key public_base
+resolve_health_url() {
+  local port tls_cert tls_key public_base
   port="$(read_env_value "PORT" "$INSTALL_DIR/.env")"
   port="${port:-8787}"
   tls_cert="$(read_env_value "TLS_CERT_FILE" "$INSTALL_DIR/.env")"
   tls_key="$(read_env_value "TLS_KEY_FILE" "$INSTALL_DIR/.env")"
   public_base="$(read_env_value "PUBLIC_BASE_URL" "$INSTALL_DIR/.env")"
   if [[ -n "$tls_cert" && -n "$tls_key" ]]; then
-    health_url="${public_base%/}/health"
+    printf '%s/health' "${public_base%/}"
   else
-    health_url="http://127.0.0.1:$port/health"
+    printf 'http://127.0.0.1:%s/health' "$port"
   fi
+}
+
+show_install_diagnostics() {
+  local log_file="$PREFIX/var/log/sv/$SERVICE_NAME/current"
+  printf '%s\n' "Service diagnostics:" >&2
+  sv status "$SERVICE_NAME" >&2 || true
+  sv status sshd >&2 || true
+  if [[ -f "$log_file" ]]; then
+    printf '%s\n' "Recent StreamForge logs:" >&2
+    tail -n 100 "$log_file" >&2 || true
+  else
+    printf 'No StreamForge log exists yet at %s\n' "$log_file" >&2
+  fi
+}
+
+verify_running_server() {
+  local health_url
+  health_url="$(resolve_health_url)"
 
   info "Waiting for the local health endpoint"
-  node -e '
+  if ! node -e '
     const healthUrl = process.argv[1];
     const deadline = Date.now() + 30000;
     async function probe() {
@@ -337,9 +369,41 @@ verify_running_server() {
       setTimeout(probe, 500);
     }
     probe();
-  ' "$health_url" || die "StreamForge did not answer $health_url within 30 seconds."
+  ' "$health_url"; then
+    show_install_diagnostics
+    die "StreamForge did not answer $health_url within 30 seconds."
+  fi
 
   info "Running the post-install doctor"
+  npm --prefix "$INSTALL_DIR" run doctor -- --require-running
+}
+
+verify_service_controls() {
+  local health_url
+  health_url="$(resolve_health_url)"
+
+  info "Verifying stop and start controls"
+  if ! "$INSTALL_DIR/scripts/stop.sh"; then
+    show_install_diagnostics
+    die "The stop control failed."
+  fi
+
+  if node -e '
+    fetch(process.argv[1], { signal: AbortSignal.timeout(2000) })
+      .then((response) => process.exit(response.ok ? 0 : 1))
+      .catch(() => process.exit(1));
+  ' "$health_url" >/dev/null 2>&1; then
+    show_install_diagnostics
+    die "StreamForge still answered its health endpoint after stop."
+  fi
+
+  if ! "$INSTALL_DIR/scripts/start.sh"; then
+    show_install_diagnostics
+    die "The start control failed."
+  fi
+
+  info "Confirming the restarted server"
+  "$INSTALL_DIR/scripts/status.sh"
   npm --prefix "$INSTALL_DIR" run doctor -- --require-running
 }
 
@@ -378,10 +442,10 @@ print_next_steps() {
   printf '  Dashboard: %s\n' "$dashboard_url"
   if is_termux; then
     printf '  SSH from PC: ssh -p 8022 %s@%s\n' "$phone_user" "$lan_ip"
-    printf '  Service:     sv status %s\n' "$SERVICE_NAME"
-    printf '  Logs:        svlogtail %s\n' "$SERVICE_NAME"
+    printf '  Control:     streamforge start|stop|restart|status|logs|doctor\n'
+    printf '  Scripts:     %s/scripts/start.sh (and stop.sh/restart.sh/status.sh/logs.sh)\n' "$INSTALL_DIR"
   else
-    printf '  Start:       cd %s && npm start\n' "$INSTALL_DIR"
+    printf '  Control:     %s/scripts/streamforge.sh start|stop|restart|status|logs|doctor\n' "$INSTALL_DIR"
   fi
   printf '\n%s\n' \
     "Before the first SSH login, add your PC public key as described in docs/TERMUX.md." \
@@ -426,6 +490,7 @@ main() {
   if is_termux; then
     install_termux_services
     verify_running_server
+    verify_service_controls
   fi
 
   print_next_steps

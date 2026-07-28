@@ -31,12 +31,14 @@ The source repository is public so a fresh phone does not need a GitHub account
 or token. Paste this single command into Termux:
 
 ```sh
-pkg update -y && pkg install -y curl && set -o pipefail && curl -fsSL https://raw.githubusercontent.com/mereMint/streamforge-local/main/install.sh | bash
+pkg update -y && pkg install -y git && ( STREAMFORGE_BOOTSTRAP="$(mktemp -d)" && trap 'rm -rf -- "$STREAMFORGE_BOOTSTRAP"' EXIT && git clone --depth 1 https://github.com/mereMint/streamforge-local.git "$STREAMFORGE_BOOTSTRAP/source" && bash "$STREAMFORGE_BOOTSTRAP/source/install.sh" )
 ```
 
 The installer:
 
-- installs Node.js LTS, Git, OpenSSH, runit services, rclone, and GitHub CLI;
+- installs Node.js LTS, npm, Git, OpenSSH, and runit services;
+- installs rclone when the current Termux package mirror provides it, without
+  blocking the core server if that optional package is unavailable;
 - clones or safely fast-forwards `mereMint/streamforge-local`;
 - uses the lockfile with `npm ci --omit=dev`;
 - creates `.env` and random local secrets without printing or replacing
@@ -61,13 +63,21 @@ and the bot is restarted after a successful save.
 
 Features with no credentials stay dormant. Spotify and low-level network
 bootstrap values are still configured in `.env`, as described in
-[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). Service commands remain:
+[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). The installer adds one lifecycle
+command:
 
 ```sh
-sv restart streamforge
-sv status streamforge
-svlogtail streamforge
+streamforge start
+streamforge stop
+streamforge restart
+streamforge status
+streamforge logs
 ```
+
+It uses the Termux runit service when available and falls back to a guarded
+background process on preliminary generic Linux installs. Matching scripts are
+available as `scripts/start.sh`, `stop.sh`, `restart.sh`, `status.sh`, and
+`logs.sh`. For foreground debugging, run `scripts/run.sh`.
 
 Open the dashboard from a PC on the same Wi-Fi:
 
@@ -118,10 +128,12 @@ credentials. Full rclone and recovery instructions are in
 
 ## Updating
 
-Rerun the quick-start command. A clean checkout is fast-forwarded, dependencies
-are reinstalled from the lockfile, configured secrets are preserved, and the
-service is restarted. If you intentionally changed source on the phone, commit
-or move those changes first; the installer will leave them untouched.
+Rerun the same Git-only quick-start command. Its temporary shallow checkout
+ensures you execute the newest installer even when the installed copy is old.
+A clean installed checkout is then fast-forwarded, dependencies are reinstalled
+from the lockfile, configured secrets are preserved, and the service is
+restarted. If you intentionally changed source on the phone, commit or move
+those changes first; the installer will leave them untouched.
 
 ## Documentation
 
