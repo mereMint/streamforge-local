@@ -91,6 +91,13 @@ test("HTTP API authenticates, persists profiles, timers, and encrypted Discord s
     await fs.rm(dataDir, { recursive: true, force: true });
   });
 
+  const dashboard = await fetch(`${base}/`);
+  assert.equal(dashboard.headers.get("cache-control"), "no-store");
+  assert.match(await dashboard.text(), /\/app\.js\?v=20260728-1/);
+
+  const dashboardScript = await fetch(`${base}/app.js`);
+  assert.equal(dashboardScript.headers.get("cache-control"), "no-cache");
+
   const login = await fetch(`${base}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },

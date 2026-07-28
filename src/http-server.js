@@ -569,7 +569,9 @@ export function createHttpServer({
       const extension = path.extname(filePath);
       response.writeHead(200, {
         "content-type": MIME[extension] || "application/octet-stream",
-        "cache-control": extension === ".html" ? "no-store" : "public, max-age=3600",
+        // Updates replace these files in place. Revalidate assets so another
+        // LAN device cannot keep running an old dashboard after an update.
+        "cache-control": extension === ".html" ? "no-store" : "no-cache",
       });
       if (request.method === "HEAD") return response.end();
       fs.createReadStream(filePath).pipe(response);

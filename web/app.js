@@ -1,3 +1,5 @@
+import { createClientId } from "./client-id.js";
+
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -21,8 +23,8 @@ const DEFAULT_PROFILES = {
   reactives: {
     id: "default", name: "Podcast", width: 1920, height: 1080, backgroundColor: "#121923",
     participants: [
-      { id: crypto.randomUUID(), name: "Host", discordUserId: "", idleUrl: "", talkingUrl: "", x: 36, y: 58, size: 28 },
-      { id: crypto.randomUUID(), name: "Guest", discordUserId: "", idleUrl: "", talkingUrl: "", x: 65, y: 58, size: 28 }
+      { id: createClientId(), name: "Host", discordUserId: "", idleUrl: "", talkingUrl: "", x: 36, y: 58, size: 28 },
+      { id: createClientId(), name: "Guest", discordUserId: "", idleUrl: "", talkingUrl: "", x: 65, y: 58, size: 28 }
     ]
   },
   timer: {
@@ -616,7 +618,7 @@ function createProfileDraft(type) {
   if (!name) return;
   const profile = {
     ...structuredClone(DEFAULT_PROFILES[type]),
-    id: `draft-${crypto.randomUUID()}`,
+    id: `draft-${createClientId()}`,
     name,
     _persisted: false
   };
@@ -667,7 +669,7 @@ function normalizeProfileRecord(record, persisted = false) {
   const flattened = {
     ...record,
     ...storedConfig,
-    id: record?.id || crypto.randomUUID(),
+    id: record?.id || createClientId(),
     name: record?.name || storedConfig.name || "Untitled profile",
     _persisted: persisted
   };
@@ -785,7 +787,7 @@ function addParticipant() {
   if (!profile) return;
   profile.participants ||= [];
   profile.participants.push({
-    id: crypto.randomUUID(),
+    id: createClientId(),
     name: `Speaker ${profile.participants.length + 1}`,
     discordUserId: "",
     idleUrl: "",
