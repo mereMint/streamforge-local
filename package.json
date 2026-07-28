@@ -1,0 +1,25 @@
+{
+  "name": "streamforge-local",
+  "version": "0.1.0",
+  "description": "A private, LAN-first stream tools server for unrooted Termux and Linux.",
+  "private": true,
+  "type": "module",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "node src/main.js",
+    "dev": "node --watch src/main.js",
+    "test": "node --test",
+    "check": "node scripts/check-syntax.js",
+    "doctor": "node scripts/doctor.js"
+  },
+  "dependencies": {
+    "@discordjs/voice": "0.19.2",
+    "discord.js": "14.27.0",
+    "dotenv": "17.4.2",
+    "sql.js": "1.14.1",
+    "ws": "8.21.1"
+  }
+}

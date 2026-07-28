@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#090d12">
+  <meta name="description" content="LAN-first stream tools and Discord automation control room.">
+  <title>StreamForge Local</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#workspace">Skip to workspace</a>
+
+  <section class="login-shell" id="loginShell" aria-labelledby="loginTitle">
+    <div class="login-panel">
+      <div class="brand-lockup brand-lockup--login">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div><strong>StreamForge</strong><span>LOCAL CONTROL ROOM</span></div>
+      </div>
+      <p class="eyebrow">Private LAN access</p>
+      <h1 id="loginTitle">Your stream stack,<br>on your phone.</h1>
+      <p class="lede">Enter the access key from your <code>.env</code> file. Your key is exchanged for a secure session cookie and is never kept in this page.</p>
+      <form id="loginForm" class="stack">
+        <label class="field">
+          <span>Access key</span>
+          <input id="accessKey" name="accessKey" type="password" autocomplete="current-password" required placeholder="Paste your LAN access key">
+        </label>
+        <button class="button button--primary button--wide" type="submit">
+          <span>Enter control room</span><span aria-hidden="true">→</span>
+        </button>
+        <p class="form-message" id="loginMessage" role="status"></p>
+      </form>
+      <div class="login-divider"><span>or</span></div>
+      <a class="button button--secondary button--wide" href="/auth/discord">Continue with Discord</a>
+      <p class="fine-print">Only available when Discord OAuth is configured. Keep this server on a trusted local network.</p>
+    </div>
+    <div class="login-signal" aria-hidden="true">
+      <div class="signal-orbit signal-orbit--one"></div>
+      <div class="signal-orbit signal-orbit--two"></div>
+      <div class="signal-core"><span>LAN</span><strong>LIVE</strong></div>
+    </div>
+  </section>
+
+  <div class="app-shell is-hidden" id="appShell">
+    <header class="topbar">
+      <button class="icon-button menu-button" id="menuButton" type="button" aria-label="Open navigation" aria-expanded="false">☰</button>
+      <a class="brand-lockup" href="#overview" data-route="overview" aria-label="StreamForge overview">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div><strong>StreamForge</strong><span>LOCAL CONTROL ROOM</span></div>
+      </a>
+      <div class="topbar-state">
+        <span class="status-pill" id="connectionPill"><i></i><span>Connecting</span></span>
+        <span class="device-chip">TERMUX · LAN</span>
+        <button class="profile-button" id="profileButton" type="button" aria-label="Account options">
+          <span class="avatar" id="userAvatar">SF</span>
+          <span class="profile-copy"><strong id="userName">Local admin</strong><small id="userRole">Owner</small></span>
+        </button>
+      </div>
+    </header>
+
+    <aside class="sidebar" id="sidebar">
+      <nav aria-label="Control room">
+        <p class="nav-label">Monitor</p>
+        <a href="#overview" class="nav-item is-active" data-route="overview"><span class="nav-icon">⌁</span><span>Overview</span></a>
+        <a href="#services" class="nav-item" data-route="services"><span class="nav-icon">▶</span><span>Services</span><b id="serviceNavCount">0</b></a>
+        <p class="nav-label">Studio</p>
+        <a href="#chat" class="nav-item" data-route="chat"><span class="nav-icon">#</span><span>Twitch chat</span></a>
+        <a href="#alerts" class="nav-item" data-route="alerts"><span class="nav-icon">!</span><span>Alerts</span></a>
+        <a href="#reactives" class="nav-item" data-route="reactives"><span class="nav-icon">◉</span><span>Reactive scene</span></a>
+        <a href="#timer" class="nav-item" data-route="timer"><span class="nav-icon">00</span><span>Stream timer</span></a>
+        <a href="#spotify" class="nav-item" data-route="spotify"><span class="nav-icon">♫</span><span>Now playing</span></a>
+        <p class="nav-label">System</p>
+        <a href="#discord" class="nav-item" data-route="discord"><span class="nav-icon">D</span><span>Discord bot</span></a>
+        <a href="#settings" class="nav-item" data-route="settings"><span class="nav-icon">⚙</span><span>Backup & settings</span></a>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="phone-meter">
+          <div><span>Phone load</span><strong id="loadPercent">—</strong></div>
+          <div class="meter"><i id="loadMeter"></i></div>
+          <small id="memoryText">Waiting for status…</small>
+        </div>
+        <button class="text-button" id="logoutButton" type="button">Lock control room</button>
+      </div>
+    </aside>
+    <button class="sidebar-scrim" id="sidebarScrim" type="button" aria-label="Close navigation"></button>
+
+    <main id="workspace" class="workspace" tabindex="-1">
+      <section class="page is-active" id="page-overview" data-page="overview">
+        <header class="page-header">
+          <div><p class="eyebrow">System overview</p><h1>Ready when you go live.</h1><p id="overviewSubtitle">Checking your local stream stack…</p></div>
+          <button class="button button--secondary" type="button" data-refresh>Refresh status</button>
+        </header>
+        <div class="metric-grid">
+          <article class="metric-card metric-card--accent"><span class="metric-icon">⌁</span><p>Server</p><strong id="serverState">Connecting</strong><small id="uptimeText">Uptime —</small></article>
+          <article class="metric-card"><span class="metric-icon">▶</span><p>Services</p><strong><span id="runningServices">0</span> running</strong><small id="totalServices">0 configured</small></article>
+          <article class="metric-card"><span class="metric-icon">D</span><p>Discord</p><strong id="discordState">Not configured</strong><small id="discordDetail">Add a bot token to connect</small></article>
+          <article class="metric-card"><span class="metric-icon">♫</span><p>Spotify</p><strong id="spotifyState">Not connected</strong><small id="spotifyDetail">Optional integration</small></article>
+        </div>
+        <div class="dashboard-grid">
+          <article class="panel panel--wide">
+            <div class="panel-heading"><div><p class="eyebrow">Quick launch</p><h2>Studio overlays</h2></div><span class="live-dot">OBS READY</span></div>
+            <div class="tool-launch-grid">
+              <button class="tool-launch" type="button" data-route-button="chat"><span>#</span><strong>Chat</strong><small>Message wall</small></button>
+              <button class="tool-launch" type="button" data-route-button="alerts"><span>!</span><strong>Alerts</strong><small>Follows & subs</small></button>
+              <button class="tool-launch" type="button" data-route-button="reactives"><span>◉</span><strong>Reactives</strong><small>Podcast scene</small></button>
+              <button class="tool-launch" type="button" data-route-button="timer"><span>00</span><strong>Timer</strong><small>Event goals</small></button>
+              <button class="tool-launch" type="button" data-route-button="spotify"><span>♫</span><strong>Song card</strong><small>Now playing</small></button>
+            </div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">Live feed</p><h2>Recent activity</h2></div><button class="text-button" id="clearActivity" type="button">Clear</button></div>
+            <ol class="activity-list" id="activityList" aria-live="polite">
+              <li><i class="activity-mark activity-mark--info"></i><div><strong>Dashboard opened</strong><small>Waiting for server events</small></div><time>now</time></li>
+            </ol>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">Device health</p><h2>Phone resources</h2></div><span id="temperatureBadge" class="tag">NORMAL</span></div>
+            <div class="health-row"><span>Memory</span><div class="meter"><i id="memoryMeter"></i></div><strong id="memoryPercent">—</strong></div>
+            <div class="health-row"><span>Storage</span><div class="meter"><i id="storageMeter"></i></div><strong id="storagePercent">—</strong></div>
+            <div class="health-row"><span>Battery</span><div class="meter"><i id="batteryMeter"></i></div><strong id="batteryPercent">—</strong></div>
+            <p class="panel-note" id="healthNote">Termux:API adds battery details, but is not required.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="page" id="page-services" data-page="services">
+        <header class="page-header"><div><p class="eyebrow">Process control</p><h1>Services</h1><p>Start only the tools you need. Commands are restricted to your server allowlist.</p></div><button class="button button--primary" type="button" data-dialog-open="serviceDialog">+ Add service</button></header>
+        <div class="notice"><span>SAFE MODE</span><p>The dashboard can only run pre-approved commands from your local configuration. No raw shell input is accepted.</p></div>
+        <div class="service-grid" id="serviceList"><article class="empty-state"><span>▶</span><h2>No services configured</h2><p>Add a service such as a game server, tunnel, or helper script.</p></article></div>
+      </section>
+
+      <section class="page editor-page" id="page-chat" data-page="chat">
+        <header class="page-header"><div><p class="eyebrow">OBS browser source</p><h1>Twitch chat</h1><p>Shape a readable chat panel that matches your stream.</p></div><span class="save-state" data-save-state>All changes saved</span></header>
+        <div class="editor-layout">
+          <form class="panel editor-form" data-profile-form="chat">
+            <div class="form-toolbar"><label class="field field--grow"><span>Profile</span><select data-profile-select aria-label="Chat profile"></select></label><button class="icon-button" data-new-profile type="button" title="New profile">+</button></div>
+            <div class="form-section"><h2>Source</h2><div class="field-row"><label class="field"><span>Twitch channel</span><input name="channel" required placeholder="your_channel"></label><label class="field"><span>Message limit</span><input name="messageLimit" type="number" min="2" max="100" value="20"></label></div><label class="toggle"><input name="showBadges" type="checkbox" checked><span></span>Show badges and name colors</label></div>
+            <div class="form-section"><h2>Typography</h2><div class="field-row"><label class="field"><span>Font family</span><select name="fontFamily"><option>System Sans</option><option>Rounded</option><option>Monospace</option><option>Serif</option></select></label><label class="field"><span>Text size</span><div class="range-field"><input name="fontSize" type="range" min="18" max="52" value="28"><output>28px</output></div></label></div></div>
+            <div class="form-section"><h2>Appearance</h2><div class="color-grid"><label class="color-field"><span>Text</span><input name="textColor" type="color" value="#f5f7fb"></label><label class="color-field"><span>Accent</span><input name="accentColor" type="color" value="#37e6b2"></label><label class="color-field"><span>Background</span><input name="backgroundColor" type="color" value="#0b1119"></label></div><label class="field"><span>Panel opacity</span><div class="range-field"><input name="opacity" type="range" min="0" max="100" value="82"><output>82%</output></div></label><label class="field"><span>Message entrance</span><select name="animation"><option value="rise">Soft rise</option><option value="slide">Slide in</option><option value="pop">Pop</option><option value="none">None</option></select></label></div>
+            <div class="form-actions"><button class="button button--secondary" type="button" data-test-overlay="chat">Send test message</button><button class="button button--primary" type="submit">Save profile</button></div>
+          </form>
+          <aside class="preview-column"><div class="preview-toolbar"><div><span class="preview-label">LIVE PREVIEW</span><small>16:9 browser source</small></div><button class="icon-button" type="button" data-refresh-preview title="Refresh preview">↻</button></div><div class="preview-frame"><iframe title="Twitch chat preview" data-overlay-preview="chat"></iframe></div><div class="obs-box"><label class="field"><span>OBS browser source URL</span><div class="copy-field"><input readonly data-overlay-url="chat"><button class="button button--secondary" type="button" data-copy-url="chat">Copy</button></div></label><small>Recommended size: 720 × 1080 · Custom FPS disabled</small></div></aside>
+        </div>
+      </section>
+
+      <section class="page editor-page" id="page-alerts" data-page="alerts">
+        <header class="page-header"><div><p class="eyebrow">OBS browser source</p><h1>Stream alerts</h1><p>Build clean alerts for follows, subscriptions, raids, and tips.</p></div><span class="save-state" data-save-state>All changes saved</span></header>
+        <div class="editor-layout">
+          <form class="panel editor-form" data-profile-form="alerts">
+            <div class="form-toolbar"><label class="field field--grow"><span>Profile</span><select data-profile-select aria-label="Alert profile"></select></label><button class="icon-button" data-new-profile type="button">+</button></div>
+            <div class="form-section"><h2>Message</h2><label class="field"><span>Headline template</span><input name="headline" value="{user} just followed!"></label><label class="field"><span>Supporting line</span><input name="message" value="Welcome to the forge."></label><div class="field-row"><label class="field"><span>Duration</span><div class="input-suffix"><input name="duration" type="number" min="2" max="30" value="7"><span>sec</span></div></label><label class="field"><span>Animation</span><select name="animation"><option value="impact">Impact</option><option value="glitch">Signal glitch</option><option value="float">Soft float</option><option value="none">None</option></select></label></div></div>
+            <div class="form-section"><h2>Card style</h2><label class="field"><span>Layout</span><select name="layout"><option value="badge">Compact badge</option><option value="card">Wide card</option><option value="minimal">Text only</option></select></label><div class="color-grid"><label class="color-field"><span>Text</span><input name="textColor" type="color" value="#ffffff"></label><label class="color-field"><span>Accent</span><input name="accentColor" type="color" value="#ffb454"></label><label class="color-field"><span>Panel</span><input name="backgroundColor" type="color" value="#101722"></label></div><label class="field"><span>Roundness</span><div class="range-field"><input name="radius" type="range" min="0" max="40" value="18"><output>18px</output></div></label></div>
+            <div class="form-actions"><button class="button button--secondary" type="button" data-test-overlay="alerts">Trigger test alert</button><button class="button button--primary" type="submit">Save profile</button></div>
+          </form>
+          <aside class="preview-column"><div class="preview-toolbar"><div><span class="preview-label">LIVE PREVIEW</span><small>Transparent background</small></div><button class="icon-button" type="button" data-refresh-preview>↻</button></div><div class="preview-frame preview-frame--transparent"><iframe title="Alert preview" data-overlay-preview="alerts"></iframe></div><div class="obs-box"><label class="field"><span>OBS browser source URL</span><div class="copy-field"><input readonly data-overlay-url="alerts"><button class="button button--secondary" type="button" data-copy-url="alerts">Copy</button></div></label><small>Recommended size: 1920 × 1080</small></div></aside>
+        </div>
+      </section>
+
+      <section class="page editor-page" id="page-reactives" data-page="reactives">
+        <header class="page-header"><div><p class="eyebrow">Podcast & PNGtuber studio</p><h1>Reactive scene</h1><p>Place every speaker once. Voice activity swaps their idle and talking art automatically.</p></div><span class="save-state" data-save-state>All changes saved</span></header>
+        <div class="reactive-layout">
+          <form class="panel editor-form" data-profile-form="reactives">
+            <div class="form-toolbar"><label class="field field--grow"><span>Scene</span><select data-profile-select aria-label="Reactive scene"></select></label><button class="icon-button" data-new-profile type="button">+</button></div>
+            <div class="form-section"><h2>Canvas</h2><div class="field-row"><label class="field"><span>Width</span><input name="width" type="number" min="320" max="3840" value="1920"></label><label class="field"><span>Height</span><input name="height" type="number" min="240" max="2160" value="1080"></label></div><label class="color-field"><span>Editor background</span><input name="backgroundColor" type="color" value="#121923"></label></div>
+            <div class="form-section"><div class="section-heading"><h2>Participants</h2><button class="text-button" id="addParticipant" type="button">+ Add</button></div><div class="participant-list" id="participantList"></div></div>
+            <div class="form-actions"><button class="button button--secondary" type="button" data-test-overlay="reactives">Test voice activity</button><button class="button button--primary" type="submit">Save scene</button></div>
+          </form>
+          <aside class="reactive-canvas-column">
+            <div class="preview-toolbar"><div><span class="preview-label">SCENE COMPOSER</span><small>Drag participants to position them</small></div><span class="canvas-size" id="canvasSize">1920 × 1080</span></div>
+            <div class="scene-stage" id="sceneStage" aria-label="Reactive participant layout"></div>
+            <div class="obs-box"><label class="field"><span>OBS browser source URL</span><div class="copy-field"><input readonly data-overlay-url="reactives"><button class="button button--secondary" type="button" data-copy-url="reactives">Copy</button></div></label><small>Set OBS width and height to match the scene canvas.</small></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="page editor-page" id="page-timer" data-page="timer">
+        <header class="page-header"><div><p class="eyebrow">Event-driven goals</p><h1>Stream timer</h1><p>Turn follows, subscriptions, or manual events into extra stream time.</p></div><span class="save-state" data-save-state>All changes saved</span></header>
+        <div class="editor-layout">
+          <form class="panel editor-form" data-profile-form="timer">
+            <div class="form-toolbar"><label class="field field--grow"><span>Profile</span><select data-profile-select aria-label="Timer profile"></select></label><button class="icon-button" data-new-profile type="button">+</button></div>
+            <div class="form-section"><h2>Rules</h2><label class="field"><span>Timer label</span><input name="label" value="THE FORGE STAYS LIVE"></label><div class="field-row"><label class="field"><span>Event</span><select name="eventType"><option value="follow">Twitch follow</option><option value="subscription">Subscription</option><option value="raid">Raid</option><option value="manual">Manual only</option></select></label><label class="field"><span>Add per event</span><div class="input-suffix"><input name="secondsPerEvent" type="number" min="1" value="300"><span>sec</span></div></label></div><div class="field-row"><label class="field"><span>Starting time</span><div class="input-suffix"><input name="startingSeconds" type="number" min="0" value="7200"><span>sec</span></div></label><label class="field"><span>Goal count</span><input name="goal" type="number" min="1" value="50"></label></div></div>
+            <div class="form-section"><h2>Appearance</h2><label class="field"><span>Style</span><select name="layout"><option value="industrial">Industrial</option><option value="clean">Clean countdown</option><option value="compact">Compact pill</option></select></label><div class="color-grid"><label class="color-field"><span>Digits</span><input name="textColor" type="color" value="#f7fbff"></label><label class="color-field"><span>Accent</span><input name="accentColor" type="color" value="#37e6b2"></label><label class="color-field"><span>Panel</span><input name="backgroundColor" type="color" value="#0e151d"></label></div></div>
+            <div class="timer-controls"><button class="button button--primary" type="button" data-timer-action="start">Start</button><button class="button button--secondary" type="button" data-timer-action="pause">Pause</button><button class="button button--secondary" type="button" data-timer-action="add">+ Event</button><button class="button button--danger" type="button" data-timer-action="reset">Reset</button></div>
+            <div class="form-actions"><button class="button button--primary" type="submit">Save profile</button></div>
+          </form>
+          <aside class="preview-column"><div class="preview-toolbar"><div><span class="preview-label">LIVE PREVIEW</span><small>Updates from the server clock</small></div><button class="icon-button" type="button" data-refresh-preview>↻</button></div><div class="preview-frame preview-frame--transparent"><iframe title="Stream timer preview" data-overlay-preview="timer"></iframe></div><div class="obs-box"><label class="field"><span>OBS browser source URL</span><div class="copy-field"><input readonly data-overlay-url="timer"><button class="button button--secondary" type="button" data-copy-url="timer">Copy</button></div></label><small>Recommended size: 900 × 300</small></div></aside>
+        </div>
+      </section>
+
+      <section class="page editor-page" id="page-spotify" data-page="spotify">
+        <header class="page-header"><div><p class="eyebrow">Spotify now playing</p><h1>Song popup</h1><p>Show the current track briefly, or keep a compact music card on screen.</p></div><a class="button button--spotify" href="/api/spotify/connect">Connect Spotify</a></header>
+        <div class="editor-layout">
+          <form class="panel editor-form" data-profile-form="spotify">
+            <div class="form-toolbar"><label class="field field--grow"><span>Profile</span><select data-profile-select aria-label="Song popup profile"></select></label><button class="icon-button" data-new-profile type="button">+</button></div>
+            <div class="form-section"><h2>Behaviour</h2><label class="field"><span>Display mode</span><select name="displayMode"><option value="always">Always visible</option><option value="change">Show when track changes</option><option value="interval">Show every few minutes</option></select></label><div class="field-row"><label class="field"><span>Visible for</span><div class="input-suffix"><input name="duration" type="number" min="3" max="60" value="12"><span>sec</span></div></label><label class="field"><span>Position</span><select name="position"><option value="bottom-left">Bottom left</option><option value="bottom-right">Bottom right</option><option value="top-left">Top left</option><option value="top-right">Top right</option></select></label></div><label class="toggle"><input name="showAlbumArt" type="checkbox" checked><span></span>Show album artwork</label><label class="toggle"><input name="showProgress" type="checkbox" checked><span></span>Show track progress</label></div>
+            <div class="form-section"><h2>Appearance</h2><label class="field"><span>Style</span><select name="layout"><option value="card">Album card</option><option value="ticker">Compact ticker</option><option value="minimal">Minimal text</option></select></label><div class="color-grid"><label class="color-field"><span>Text</span><input name="textColor" type="color" value="#ffffff"></label><label class="color-field"><span>Accent</span><input name="accentColor" type="color" value="#1ed760"></label><label class="color-field"><span>Panel</span><input name="backgroundColor" type="color" value="#121816"></label></div></div>
+            <div class="form-actions"><button class="button button--secondary" type="button" data-test-overlay="spotify">Preview sample song</button><button class="button button--primary" type="submit">Save profile</button></div>
+          </form>
+          <aside class="preview-column"><div class="preview-toolbar"><div><span class="preview-label">LIVE PREVIEW</span><small id="spotifyPreviewStatus">Waiting for Spotify</small></div><button class="icon-button" type="button" data-refresh-preview>↻</button></div><div class="preview-frame preview-frame--transparent"><iframe title="Now playing preview" data-overlay-preview="spotify"></iframe></div><div class="obs-box"><label class="field"><span>OBS browser source URL</span><div class="copy-field"><input readonly data-overlay-url="spotify"><button class="button button--secondary" type="button" data-copy-url="spotify">Copy</button></div></label><small>Recommended size: 800 × 240</small></div></aside>
+        </div>
+      </section>
+
+      <section class="page" id="page-discord" data-page="discord">
+        <header class="page-header"><div><p class="eyebrow">Community automation</p><h1>Discord bot</h1><p>Welcome members, control services, and give every voice group its own room.</p></div><span class="status-pill" id="discordConnectionPill"><i></i><span>Disconnected</span></span></header>
+        <form class="settings-grid" data-settings-form="discord">
+          <article class="panel settings-card settings-card--full">
+            <div class="panel-heading">
+              <div><p class="eyebrow">Bot setup</p><h2>Discord application & server</h2></div>
+              <span class="tag" id="discordCredentialState">SETUP REQUIRED</span>
+            </div>
+            <div class="credential-flags" aria-live="polite">
+              <span id="botTokenFlag">Bot token · not set</span>
+              <span id="clientSecretFlag">OAuth secret · not set</span>
+            </div>
+            <div class="field-row">
+              <label class="field"><span>Bot token</span><input name="botToken" type="password" data-secret autocomplete="new-password" placeholder="Not configured"><small>Write-only. Leave empty to keep the saved token.</small></label>
+              <label class="field"><span>Discord application ID</span><input name="clientId" inputmode="numeric" placeholder="123456789012345678"></label>
+            </div>
+            <div class="field-row">
+              <label class="field"><span>OAuth client secret</span><input name="clientSecret" type="password" data-secret autocomplete="new-password" placeholder="Not configured"><small>Write-only. Leave empty to keep the saved secret.</small></label>
+              <label class="field"><span>Discord redirect URI</span><input name="redirectUri" type="url" placeholder="http://192.168.1.20:8787/auth/discord/callback"></label>
+            </div>
+            <div class="field-row">
+              <label class="field"><span>Discord server (guild) ID</span><input name="guildId" inputmode="numeric" placeholder="123456789012345678"></label>
+              <label class="field"><span>Reactive voice channel ID</span><input name="reactiveVoiceChannelId" inputmode="numeric" placeholder="Voice channel used for speaking detection"></label>
+            </div>
+            <div class="field-row">
+              <label class="field"><span>Owner user IDs</span><input name="ownerUserIds" placeholder="ID, ID, ID"><small>Comma-separated users with full bot control.</small></label>
+              <label class="field"><span>Admin / operator role IDs</span><input name="adminRoleIds" placeholder="ID, ID, ID"><small>Comma-separated roles allowed to control services.</small></label>
+            </div>
+            <p class="form-message discord-config-error" id="discordConnectionError" role="status"></p>
+          </article>
+          <article class="panel settings-card"><div class="panel-heading"><div><p class="eyebrow">Joining members</p><h2>Automatic role</h2></div></div><label class="field"><span>Role ID</span><input name="autoRoleId" placeholder="123456789012345678"></label><p class="panel-note">Leave blank to disable. The bot role must sit above the assigned role in Discord.</p></article>
+          <article class="panel settings-card settings-card--wide"><div class="panel-heading"><div><p class="eyebrow">Join to create</p><h2>Temporary voice rooms</h2></div></div><div class="field-row"><label class="field"><span>Creator channel ID</span><input name="tempVoiceLobbyId" placeholder="Channel members join"></label><label class="field"><span>New room category ID</span><input name="tempVoiceCategoryId" placeholder="Parent category"></label></div><p class="panel-note">Leave the creator channel blank to disable. Members use <code>/voice-settings</code> to save their room name, user limit, visibility, lock, and whitelist; those preferences are restored next time.</p></article>
+          <article class="panel settings-card"><div class="panel-heading"><div><p class="eyebrow">Server controls</p><h2>Bot commands</h2></div></div><p class="panel-note">Owner users and operator roles configured above may start, stop, and restart saved service IDs.</p><label class="field"><span>Status panel channel ID</span><input name="statusChannelId" placeholder="Channel for live status panel"></label><button class="button button--secondary" type="button" id="publishStatusPanel">Publish / refresh panel</button></article>
+          <article class="panel settings-card"><div class="panel-heading"><div><p class="eyebrow">Diagnostics</p><h2>Connection</h2></div><span class="signal-bars" aria-hidden="true"><i></i><i></i><i></i></span></div><dl class="detail-list"><div><dt>Bot user</dt><dd id="discordBotUser">—</dd></div><div><dt>Guild</dt><dd id="discordGuild">—</dd></div><div><dt>Gateway ping</dt><dd id="discordPing">—</dd></div></dl><button class="button button--secondary" type="button" id="testDiscord">Test Discord connection</button></article>
+          <div class="settings-actions"><span class="save-state" data-save-state>All changes saved</span><button class="button button--primary" type="submit">Save Discord settings</button></div>
+        </form>
+      </section>
+
+      <section class="page" id="page-settings" data-page="settings">
+        <header class="page-header"><div><p class="eyebrow">System</p><h1>Backup & settings</h1><p>Keep StreamForge portable and recoverable.</p></div><button class="button button--primary" id="backupNow" type="button">Back up now</button></header>
+        <form class="settings-grid" data-settings-form="general">
+          <article class="panel settings-card"><div class="panel-heading"><div><p class="eyebrow">Identity</p><h2>Server details</h2></div></div><label class="field"><span>Server name</span><input name="serverName" value="StreamForge Phone"></label><label class="field"><span>Public LAN origin</span><input name="publicOrigin" placeholder="http://192.168.1.20:8787"></label><p class="panel-note">Used when copying OBS URLs to another device.</p></article>
+          <article class="panel settings-card settings-card--wide"><div class="panel-heading"><div><p class="eyebrow">Cloud copy</p><h2>Backup destination</h2></div><span class="tag" id="backupProviderState">LOCAL ONLY</span></div><div class="field-row"><label class="field"><span>Provider</span><select name="backupProvider"><option value="local">Local archives only</option><option value="google-drive">Google Drive via rclone</option><option value="webdav">WebDAV via rclone</option></select></label><label class="field"><span>Keep latest</span><div class="input-suffix"><input name="backupRetention" type="number" min="1" max="90" value="10"><span>copies</span></div></label></div><label class="field"><span>Remote folder name</span><input name="backupFolder" value="StreamForge Backups"></label><div class="inline-actions"><button class="button button--secondary" type="button" id="testBackup">Test rclone destination</button></div><p class="panel-note">Set <code>RCLONE_REMOTE</code> during server setup, for example <code>gdrive:StreamForge</code>. This button verifies that destination without exposing cloud credentials in the browser.</p></article>
+          <article class="panel settings-card settings-card--full"><div class="panel-heading"><div><p class="eyebrow">Archive history</p><h2>Recent backups</h2></div><button class="text-button" type="button" id="refreshBackups">Refresh</button></div><div class="table-wrap"><table><thead><tr><th>Created</th><th>Destination</th><th>Size</th><th>Status</th></tr></thead><tbody id="backupList"><tr><td colspan="4" class="table-empty">No backups yet.</td></tr></tbody></table></div></article>
+          <div class="settings-actions"><span class="save-state" data-save-state>All changes saved</span><button class="button button--primary" type="submit">Save server settings</button></div>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="serviceDialog">
+    <form method="dialog" class="dialog-form" id="serviceForm">
+      <header><div><p class="eyebrow">Process allowlist</p><h2>Add service</h2></div><button class="icon-button" value="cancel" aria-label="Close">×</button></header>
+      <div class="field-row">
+        <label class="field"><span>Service name</span><input name="name" required placeholder="Minecraft server"></label>
+        <label class="field"><span>Service ID</span><input name="id" required placeholder="minecraft" pattern="[a-z0-9][a-z0-9_-]{0,47}"><small>Lowercase letters, numbers, _ or -.</small></label>
+      </div>
+      <label class="field"><span>Executable / command</span><input name="command" required placeholder="node"><small>Direct executable only. Shell operators are never evaluated.</small></label>
+      <label class="field"><span>Arguments</span><textarea name="args" rows="4" placeholder="server.js&#10;--port&#10;25565"></textarea><small>One argument per line. Spaces inside a line stay inside that argument.</small></label>
+      <label class="field"><span>Working directory</span><input name="cwd" placeholder="services/minecraft"><small>Optional path relative to the StreamForge repository.</small></label>
+      <div class="field-row">
+        <label class="toggle"><input name="enabled" type="checkbox" checked><span></span>Service enabled</label>
+        <label class="toggle"><input name="autostart" type="checkbox"><span></span>Start with StreamForge</label>
+      </div>
+      <footer><button class="button button--secondary" value="cancel">Cancel</button><button class="button button--primary" type="submit" value="default">Add service</button></footer>
+    </form>
+  </dialog>
+
+  <template id="participantTemplate">
+    <article class="participant-card">
+      <div class="participant-title"><span class="participant-swatch"></span><strong data-participant-label>Participant</strong><button class="icon-button" type="button" data-remove-participant aria-label="Remove participant">×</button></div>
+      <label class="field"><span>Display name</span><input data-participant-field="name" placeholder="Speaker name"></label>
+      <label class="field"><span>Discord user ID</span><input data-participant-field="discordUserId" placeholder="123456789012345678"></label>
+      <label class="field"><span>Idle PNG URL</span><input data-participant-field="idleUrl" placeholder="/uploads/idle.png"></label>
+      <label class="field"><span>Talking PNG URL</span><input data-participant-field="talkingUrl" placeholder="/uploads/talking.png"></label>
+      <div class="field-row field-row--three"><label class="field"><span>X</span><input data-participant-field="x" type="number" min="0" max="100"></label><label class="field"><span>Y</span><input data-participant-field="y" type="number" min="0" max="100"></label><label class="field"><span>Size</span><input data-participant-field="size" type="number" min="10" max="100"></label></div>
+    </article>
+  </template>
+
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

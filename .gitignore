@@ -1,0 +1,12 @@
+node_modules/
+.env
+.env.pre-restore-*
+data/
+data.pre-restore-*/
+data.failed-*/
+.restore-safety/
+*.log
+.DS_Store
+.idea/
+.vscode/
+coverage/
