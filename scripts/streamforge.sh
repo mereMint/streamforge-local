@@ -135,6 +135,13 @@ runit_is_reachable() {
   sv status "$SERVICE_DIR" >/dev/null 2>&1
 }
 
+runit_pid() {
+  local status
+  status="$(sv status "$SERVICE_DIR" 2>/dev/null)" || return 1
+  [[ "$status" =~ ^run:.*\(pid[[:space:]]+([0-9]+)\) ]] || return 1
+  printf '%s' "${BASH_REMATCH[1]}"
+}
+
 try_start_runit_supervisor() {
   runit_is_configured || return 1
   runit_is_reachable && return 0
@@ -302,14 +309,20 @@ stop_streamforge() {
 }
 
 restart_streamforge() {
+  local previous_pid current_pid
   require_project
   if try_start_runit_supervisor; then
     stop_direct_if_running true
+    previous_pid="$(runit_pid 2>/dev/null || true)"
     if ! sv -w "${STREAMFORGE_SV_WAIT_SECONDS:-30}" force-restart "$SERVICE_DIR"; then
-      show_runit_failure
-      die "runit rejected the StreamForge restart request."
+      warn "runit escalated the restart; verifying the replacement process."
     fi
     sleep 0.5
+    current_pid="$(runit_pid 2>/dev/null || true)"
+    if [[ -n "$previous_pid" && "$current_pid" == "$previous_pid" ]]; then
+      show_runit_failure
+      die "runit did not replace the StreamForge process."
+    fi
     if sv status "$SERVICE_DIR" 2>/dev/null | grep -q '^run:'; then
       if wait_for_health; then
         info "StreamForge restarted under runit."
