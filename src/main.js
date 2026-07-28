@@ -163,13 +163,13 @@ async function bootstrap() {
     stopping = true;
     console.log(`Stopping after ${signal}...`);
     spotify.stop();
+    hub.close();
     await Promise.allSettled([
       twitch.stop(),
       discord.stop(),
       services.stopAll(),
       new Promise((resolve) => server.close(resolve)),
     ]);
-    hub.close();
     await db.close();
   };
 

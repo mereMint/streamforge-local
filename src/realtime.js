@@ -56,7 +56,8 @@ export class RealtimeHub {
   }
 
   close() {
-    for (const socket of this.clients.keys()) socket.close(1001, "Server stopping");
+    for (const socket of this.clients.keys()) socket.terminate();
+    this.clients.clear();
     this.server.close();
   }
 }

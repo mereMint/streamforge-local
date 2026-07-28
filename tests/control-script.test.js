@@ -61,6 +61,32 @@ test("control command documents every lifecycle action", { skip: skipShellLifecy
   }
 });
 
+test("controller resolves the project when invoked through a symlink", { skip: skipShellLifecycle }, (t) => {
+  const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "streamforge-control-link-"));
+  const linkedController = path.join(fixture, "streamforge");
+  const fakeNode = path.join(fixture, "fake-node");
+  fs.symlinkSync(controller, linkedController);
+  fs.writeFileSync(
+    fakeNode,
+    ["#!/usr/bin/env bash", "printf 'node argument: %s\\n' \"$1\"", ""].join("\n"),
+    { mode: 0o700 },
+  );
+
+  t.after(() => fs.rmSync(fixture, { recursive: true, force: true }));
+
+  const result = spawnSync(linkedController, ["run"], {
+    env: {
+      ...process.env,
+      STREAMFORGE_NODE_BIN: fakeNode,
+      STREAMFORGE_SERVICE_MODE: "direct",
+    },
+    encoding: "utf8",
+    timeout: 5_000,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /node argument: src\/main\.js/);
+});
+
 test("direct fallback starts, logs, and stops a guarded process", { skip: skipShellLifecycle }, (t) => {
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "streamforge-control-"));
   const projectDir = path.join(fixture, "project");
