@@ -65,6 +65,11 @@ test("controller resolves the project when invoked through a symlink", { skip: s
   const fixture = fs.mkdtempSync(path.join(os.tmpdir(), "streamforge-control-link-"));
   const linkedController = path.join(fixture, "streamforge");
   const fakeNode = path.join(fixture, "fake-node");
+  assert.notEqual(
+    fs.statSync(controller).mode & 0o111,
+    0,
+    "the installed controller target must remain executable after Git updates",
+  );
   fs.symlinkSync(controller, linkedController);
   fs.writeFileSync(
     fakeNode,
