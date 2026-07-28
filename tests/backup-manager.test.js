@@ -49,6 +49,7 @@ test("backup retention only prunes exact local archive pairs", () => {
     });
     fs.writeFileSync(path.join(dataDir, "backups", "keep-me.txt"), "safe");
     manager.configure({ backupRetention: 2, backupProvider: "google-drive" });
+    assert.equal(manager.publicConfiguration().provider, "local");
     assert.deepEqual(manager.pruneLocal(), [names[0]]);
     assert.equal(fs.existsSync(path.join(dataDir, "backups", names[0])), false);
     assert.equal(fs.existsSync(path.join(dataDir, "backups", `${names[0]}.sha256`)), false);
@@ -81,6 +82,15 @@ test("backup destination honors the selected provider and configured folder", ()
       manager.activeRemote(),
       "streamforge-drive:StreamForge Backups",
       "an existing folder must not be duplicated",
+    );
+    manager.configure({
+      backupProvider: "google-drive",
+      backupRemote: "streamforge-drive:",
+    });
+    assert.equal(
+      manager.publicConfiguration().provider,
+      "rclone",
+      "legacy Google provider values migrate to the rclone option",
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

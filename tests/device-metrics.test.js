@@ -4,6 +4,7 @@ import {
   cpuPercentBetween,
   createDeviceMetrics,
   diskUsage,
+  sysfsBatteryData,
 } from "../src/device-metrics.js";
 
 test("device metric helpers calculate bounded CPU and storage usage", () => {
@@ -90,4 +91,54 @@ test("device metrics report unavailable optional phone sensors explicitly", asyn
   assert.equal(status.storagePercent, null);
   assert.match(status.availability.battery.reason, /not installed/i);
   assert.match(status.availability.storage.reason, /denied/i);
+});
+
+test("device metrics fall back to Android battery sysfs when Termux API fails", async () => {
+  const files = {
+    "/sys/class/power_supply/battery/capacity": "85\n",
+    "/sys/class/power_supply/battery/temp": "330\n",
+    "/sys/class/power_supply/battery/status": "Not charging\n",
+    "/sys/class/power_supply/battery/health": "Good\n",
+  };
+  assert.deepEqual(
+    sysfsBatteryData({
+      readFileSync: (file) => {
+        if (!(file in files)) throw new Error("missing");
+        return files[file];
+      },
+    }),
+    {
+      batteryPercent: 85,
+      temperatureC: 33,
+      batteryStatus: "Not charging",
+      batteryHealth: "Good",
+      batteryPlugged: null,
+    },
+  );
+
+  const metrics = createDeviceMetrics({
+    dataDir: "/data",
+    osModule: {
+      cpus: () => [],
+      loadavg: () => [0, 0, 0],
+      totalmem: () => 100,
+      freemem: () => 50,
+    },
+    fsModule: {
+      statfsSync: () => ({ bsize: 1, blocks: 100, bavail: 50 }),
+      readFileSync: (file) => {
+        if (!(file in files)) throw new Error("missing");
+        return files[file];
+      },
+      readdirSync: () => [],
+    },
+    execFileFn: async () => {
+      throw new Error("Termux API unavailable");
+    },
+  });
+  const status = await metrics.collect();
+  assert.equal(status.batteryPercent, 85);
+  assert.equal(status.temperatureC, 33);
+  assert.equal(status.availability.battery.available, true);
+  assert.equal(status.availability.temperature.available, true);
 });

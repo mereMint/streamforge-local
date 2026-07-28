@@ -72,7 +72,14 @@ async function bootstrap() {
   const auth = new AuthManager(config);
   const backups = new BackupManager(config);
   const generalSettings = db.getSetting("settings:general", {});
-  backups.configure(generalSettings);
+  const backupConfiguration = backups.configure(generalSettings);
+  if (
+    generalSettings.backupProvider &&
+    generalSettings.backupProvider !== backupConfiguration.provider
+  ) {
+    generalSettings.backupProvider = backupConfiguration.provider;
+    await db.setSetting("settings:general", generalSettings);
+  }
   if (generalSettings.backupRemote) backups.setRcloneRemote(generalSettings.backupRemote);
   const deviceMetrics = createDeviceMetrics({ dataDir: config.dataDir });
 

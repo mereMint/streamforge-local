@@ -16,10 +16,18 @@ export class BackupManager {
 
   configure(input = {}) {
     const retention = Number(input.backupRetention ?? input.retention);
+    const requestedProvider = String(
+      input.backupProvider || input.provider || this.preferences.provider || "local",
+    )
+      .trim()
+      .slice(0, 40);
+    const provider = ["local", "rclone", "webdav"].includes(requestedProvider)
+      ? requestedProvider
+      : this.config.rcloneRemote || input.backupRemote
+        ? "rclone"
+        : "local";
     this.preferences = {
-      provider: String(input.backupProvider || input.provider || this.preferences.provider || "local")
-        .trim()
-        .slice(0, 40),
+      provider,
       retention: Number.isFinite(retention)
         ? Math.max(1, Math.min(100, Math.round(retention)))
         : this.preferences.retention,

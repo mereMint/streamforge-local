@@ -7,6 +7,7 @@ const execFileAsync = promisify(execFile);
 const BATTERY_CACHE_MS = 30_000;
 
 function boundedPercent(value) {
+  if (value == null || String(value).trim() === "") return null;
   const number = Number(value);
   if (!Number.isFinite(number)) return null;
   return Math.min(100, Math.max(0, Number(number.toFixed(1))));
@@ -68,6 +69,49 @@ function batteryData(input) {
   };
 }
 
+function sysfsTemperature(value) {
+  let temperature = Number.parseFloat(value);
+  if (!Number.isFinite(temperature)) return null;
+  if (Math.abs(temperature) >= 10_000) temperature /= 1_000;
+  else if (Math.abs(temperature) >= 100) temperature /= 10;
+  return temperature > -50 && temperature < 150
+    ? Number(temperature.toFixed(1))
+    : null;
+}
+
+export function sysfsBatteryData(fsModule = fs) {
+  const root = "/sys/class/power_supply/battery";
+  const read = (name) => {
+    try {
+      return String(fsModule.readFileSync(`${root}/${name}`, "utf8")).trim();
+    } catch {
+      return "";
+    }
+  };
+  const batteryPercent = boundedPercent(read("capacity"));
+  const temperatureC = sysfsTemperature(read("temp"));
+  const batteryStatus = read("status") || null;
+  const batteryHealth = read("health") || null;
+  if (
+    batteryPercent == null &&
+    temperatureC == null &&
+    !batteryStatus &&
+    !batteryHealth
+  ) {
+    return null;
+  }
+  return {
+    batteryPercent,
+    temperatureC,
+    batteryStatus,
+    batteryHealth,
+    batteryPlugged:
+      batteryStatus && /^(charging|full)$/i.test(batteryStatus)
+        ? "POWER_SUPPLY"
+        : null,
+  };
+}
+
 function thermalTemperature(fsModule) {
   try {
     const root = "/sys/class/thermal";
@@ -117,18 +161,21 @@ export function createDeviceMetrics({
         reason: null,
       };
     } catch (error) {
-      cachedBattery = {
-        ok: false,
-        batteryPercent: null,
-        temperatureC: null,
-        batteryStatus: null,
-        batteryHealth: null,
-        batteryPlugged: null,
-        reason:
-          error?.code === "ENOENT"
-            ? "Termux:API battery command is not installed."
-            : `Battery details unavailable: ${error.message}`,
-      };
+      const fallback = sysfsBatteryData(fsModule);
+      cachedBattery = fallback
+        ? { ok: true, ...fallback, reason: null }
+        : {
+            ok: false,
+            batteryPercent: null,
+            temperatureC: null,
+            batteryStatus: null,
+            batteryHealth: null,
+            batteryPlugged: null,
+            reason:
+              error?.code === "ENOENT"
+                ? "Termux:API battery command is not installed."
+                : `Battery details unavailable: ${error.message}`,
+          };
     }
     return cachedBattery;
   }
